@@ -1,0 +1,53 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# Shared CUDA stack (point tracking, navigation, and segmentation)
+torch==2.2.2+cu121
+torchvision==0.17.2+cu121
+numpy==1.26.4
+scipy>=1.10,<1.14
+Pillow>=10,<12
+opencv-python-headless==4.10.0.84
+imageio>=2.34
+imageio-ffmpeg>=0.5
+matplotlib>=3.8,<3.10
+tqdm>=4.66
+PyYAML>=6
+
+# CoTracker / TAPIR
+dm-tree>=0.1.8
+einshape>=1.0
+mediapy>=1.2
+
+# Grounded-Segment-Anything + optional Transformers compatibility backend
+transformers==4.46.3
+huggingface-hub>=0.26,<1
+safetensors>=0.4
+timm>=1.0
+addict>=2.4
+yapf>=0.43
+pycocotools>=2.0
+
+# ViNT / NoMaD inference
+efficientnet-pytorch==0.7.1
+diffusers==0.30.3
+vit-pytorch>=1.7
+positional-encodings>=6.0
+einops>=0.8
+warmup-scheduler==0.3
+
+# Habitat-Lab 0.3.3 runtime
+gym==0.23.0
+attrs>=19.1
+hydra-core>=1.2
+omegaconf>=2.2.3
+numba>=0.57
+numpy-quaternion>=2023.0
+pickle5; python_version < "3.8"
+
+# Build/runtime helpers
+setuptools<70
+wheel
+cmake>=3.22
+ninja
+pip
+gdown>=6

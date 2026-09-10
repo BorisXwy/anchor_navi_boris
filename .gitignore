@@ -1,0 +1,34 @@
+# Local credentials. Never commit these files.
+.env.deepseek
+.env
+
+# Generated outputs and Python caches.
+outputs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+.venv.*/
+
+# Downloaded checkpoints, compiled extensions, and build trees.
+weights/
+models/**/.git/
+models/**/build/
+models/**/checkpoints/
+models/**/deployment/model_weights/
+models/**/*.pth
+models/**/*.pt
+models/**/*.ckpt
+models/**/*.bin
+models/**/*.so
+models/**/*.a
+models/**/*.o
+models/**/*.glb
+models/**/*.mp4
+models/**/data/
+models/**/res/
+data/habitat/
+
+# Third-party repositories are installed separately by setup_unified_env.sh.
+models/

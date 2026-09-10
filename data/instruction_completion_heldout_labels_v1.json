@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "task": "previous_node_to_current_node_instruction_completion",
+  "split": "held_out_after_v7_frozen",
+  "allowed_statuses": ["completed", "unknown"],
+  "labels": [
+    {"case_index": 13, "status": "unknown", "rationale": "The edge ascends, but the exact instruction-relative count of eight stairs is not established."},
+    {"case_index": 21, "status": "completed", "rationale": "The edge passes the bed on its right and ends facing the arch opening with the bed behind."},
+    {"case_index": 40, "status": "unknown", "rationale": "The point is already near-field and the zero-motion edge neither turns around nor descends the stairs."},
+    {"case_index": 46, "status": "unknown", "rationale": "The camera moves within the ornate room; no requested doorway crossing occurs."},
+    {"case_index": 56, "status": "unknown", "rationale": "The camera approaches a curtained wall and does not establish the left turn at the stanchion."},
+    {"case_index": 60, "status": "unknown", "rationale": "The camera approaches the curtained wall rather than traversing the double doorway at the hallway end."},
+    {"case_index": 67, "status": "unknown", "rationale": "The edge is on flat room floor and does not visibly descend three steps."},
+    {"case_index": 82, "status": "completed", "rationale": "The edge crosses from the corridor into the right bedroom and the current panorama is surrounded by the wall of mirrors."},
+    {"case_index": 86, "status": "unknown", "rationale": "The edge approaches the sofa/counter area but does not establish passing both landmarks toward the next-room doorway."}
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task": "previous_node_to_current_node_instruction_completion",
+  "allowed_statuses": ["completed", "unknown"],
+  "protocol": {
+    "inputs_audited": [
+      "active sub-instruction",
+      "previous six-view panorama",
+      "chronological edge keyframes",
+      "current six-view panorama",
+      "incoming edge action history"
+    ],
+    "completed_definition": "The audited edge contains the requested semantic completion event.",
+    "unknown_definition": "The edge does not establish completion; this makes no on-route or off-route claim.",
+    "exclusions": "Transitions with a hidden physical point-arrival failure are excluded from this semantic module score. Demonstration endpoint interpolation is auxiliary and is not the label."
+  },
+  "labels": [
+    {"case_index": 0, "status": "completed", "rationale": "The edge crosses the bedroom door frame from the source-side threshold and ends surrounded by the bedroom."},
+    {"case_index": 1, "status": "unknown", "rationale": "The edge does not establish entry into the hallway second to the right from the stairs."},
+    {"case_index": 2, "status": "unknown", "rationale": "The middle archway remains ahead; no source-to-hallway crossing is established."},
+    {"case_index": 4, "status": "unknown", "rationale": "Motion around the dining table is visible, but entry into the next room is not."},
+    {"case_index": 9, "status": "unknown", "rationale": "The fourth door on the right cannot be identified or counted from the transition."},
+    {"case_index": 17, "status": "unknown", "rationale": "The edge approaches the dining-table/double-door area without a visible double-door crossing."},
+    {"case_index": 20, "status": "unknown", "rationale": "Neither the instructed left turn at the circle nor entry into the next room is established."},
+    {"case_index": 25, "status": "unknown", "rationale": "The current spatial relation is not clearly between the pillar and stairs."},
+
+    {"case_index": 10, "status": "unknown", "rationale": "The point is initially near-field and the edge has no motion; it cannot newly complete entry into the kitchen."},
+    {"case_index": 18, "status": "unknown", "rationale": "The mantle is not reliably localized near the stopped camera."},
+    {"case_index": 19, "status": "completed", "rationale": "The edge starts at the stair base, continuously ascends, and ends with substantial stairs visible both below and above, matching halfway."},
+    {"case_index": 26, "status": "unknown", "rationale": "The floral chair remains visibly distant rather than at the requested near relation."},
+    {"case_index": 53, "status": "unknown", "rationale": "The edge advances along the paintings but does not establish the far end of the hallway."},
+    {"case_index": 68, "status": "unknown", "rationale": "The vague left-side target is not localized strongly enough to establish completion."},
+    {"case_index": 74, "status": "unknown", "rationale": "The camera approaches but is not visibly stopped within the doorway threshold."},
+    {"case_index": 87, "status": "unknown", "rationale": "The bed remains at a distance and the in-front stopping relation is not established."},
+
+    {"case_index": 5, "status": "completed", "rationale": "The previous node is at the laundry-room side of the arch, the keyframes traverse that arch, and the current panorama is surrounded by the hallway."},
+    {"case_index": 11, "status": "unknown", "rationale": "A leftward approach is visible, but the doorway remains ahead and no portal crossing is established."},
+    {"case_index": 14, "status": "completed", "rationale": "The previous node is surrounded by the closet/dressing area, the keyframes traverse its frame, and the current node is surrounded by the hallway."},
+    {"case_index": 44, "status": "unknown", "rationale": "The red carpet continues ahead; its end is not reached on this edge."},
+    {"case_index": 49, "status": "unknown", "rationale": "The next doorway is approached but not entered or reached clearly."},
+    {"case_index": 57, "status": "completed", "rationale": "The keyframes cross the carpeted door frame and the current panorama is inside the ornate bedroom."},
+    {"case_index": 64, "status": "unknown", "rationale": "The intended steamroom door is visually ambiguous; proximity to the selected wall/floor point does not establish the named door relation."},
+    {"case_index": 71, "status": "completed", "rationale": "The keyframes cross the door from the corridor into the visually distinct blue pool room."},
+    {"case_index": 88, "status": "completed", "rationale": "The edge starts within the galley kitchen, traverses its length, and reaches/crosses the far doorway, completing the requested crossing through the kitchen."}
+  ]
+}
