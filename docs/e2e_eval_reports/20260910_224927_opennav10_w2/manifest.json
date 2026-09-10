@@ -1,0 +1,225 @@
+{
+  "schema_version": "e2e_round_manifest_v1",
+  "round_id": "20260910_224927_opennav10_w2",
+  "run_tag": "opennav10_w2",
+  "created_utc": "2026-09-10T14:49:29.426381+00:00",
+  "resumed_utc": null,
+  "status": "complete",
+  "test_scope": "end_to_end_from_dataset_start",
+  "benchmark": "OpenNav_R2R-CE_100 episode ids replayed on official R2R VLN-CE val_unseen (OpenNav start_rotation not used)",
+  "git": {
+    "commit": "a6f29aa3daa89126f6b63d0faa00a3e9db7e7050",
+    "dirty": false
+  },
+  "dataset_path": "/workspace/Navi-Agent/VLN-CE-master/VLN-CE-master/data/datasets/R2R_VLNCE_v1-3_preprocessed/R2R_VLNCE_v1-3_preprocessed/val_unseen/val_unseen.json.gz",
+  "dataset_sha256": "1767a407e2c8a011fbb7abece76cd64c5b39ff9fa0e9e340ebdce5a490d167c3",
+  "mp3d_root": "/workspace/3d_wm_vln/StreamVLN/data/scene_datasets/mp3d",
+  "episode_selection": {
+    "source": "ids",
+    "count": 10,
+    "episodes": [
+      {
+        "episode_id": "7",
+        "episode_index": 6,
+        "trajectory_id": 42,
+        "scene_id": "mp3d/x8F5xyUWy9e/x8F5xyUWy9e.glb",
+        "instruction": "Go straight past the pool. Walk between the bar and chairs.  Stop when you get to the corner of the bar.  That's where you will wait. "
+      },
+      {
+        "episode_id": "11",
+        "episode_index": 10,
+        "trajectory_id": 57,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Walk across the floor and wait the archway. "
+      },
+      {
+        "episode_id": "13",
+        "episode_index": 12,
+        "trajectory_id": 62,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Walk passed the dining table and continue towards the kitchen. Walk through the kitchen passed the counters and stove and stop near the sink. "
+      },
+      {
+        "episode_id": "40",
+        "episode_index": 39,
+        "trajectory_id": 155,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Walk into the kitchen area. Walk by the sink and oven. Walk straight into the hallway. turn right into the little room. Turn left and walk into the bedroom. Stop by the corner of the bed. "
+      },
+      {
+        "episode_id": "42",
+        "episode_index": 41,
+        "trajectory_id": 155,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Walk towards the kitchen area. Keep walking along the kitchen area towards the doorway. Turn right and exit the kitchen area walking across the small living room area and into the bedroom to you left. "
+      },
+      {
+        "episode_id": "52",
+        "episode_index": 51,
+        "trajectory_id": 175,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Take a right at the large clock and travel straight through the kitchen, when you see the thermostat on the wall you are right next to the washroom. "
+      },
+      {
+        "episode_id": "70",
+        "episode_index": 69,
+        "trajectory_id": 254,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Go through living room, through the door on the to the right, through the den, through the dining to, to the outdoor foyer. Stop before going outside. "
+      },
+      {
+        "episode_id": "94",
+        "episode_index": 93,
+        "trajectory_id": 300,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Walk forward, take a left around the corner and walk all the way to the end of the hallway, and stop at the door before the bedroom. "
+      },
+      {
+        "episode_id": "116",
+        "episode_index": 115,
+        "trajectory_id": 412,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "you are in a closet, walk forward, turn right to walk out of closet into a bed room. turn right and see bath room, walk into bathroom and wait near the tub and sink. "
+      },
+      {
+        "episode_id": "140",
+        "episode_index": 139,
+        "trajectory_id": 552,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Walk through the doorway to the right of the dining room table then go through the doorway by the flower pot.  Take the doorway directly left of the staircase and wait there. "
+      }
+    ]
+  },
+  "workers": 2,
+  "devices": [
+    "cuda:0"
+  ],
+  "gpu_memory_check": {
+    "cuda:0": {
+      "name": "NVIDIA GeForce RTX 4090",
+      "free_gb": 24.98,
+      "total_gb": 25.39,
+      "workers": 2,
+      "required_gb": 22.0,
+      "sufficient": true
+    }
+  },
+  "gpu_memory_per_worker_gb": 11.0,
+  "vlm": {
+    "backend": "deepseek",
+    "credential_source": "environment:OPENROUTER_API_KEY",
+    "base_url": "https://www.dmxapi.cn/v1",
+    "model": "deepseek-v4-flash-vision-exp",
+    "thinking": "disabled"
+  },
+  "assets": {
+    "tapir_checkpoint": "/workspace/anchor_navi_boris/models/tapnet/tapnet/checkpoints/causal_bootstapir_checkpoint.pt",
+    "gnm_policy_weights": "/workspace/anchor_navi_boris/models/visualnav-transformer/deployment/model_weights/gnm.pth",
+    "huggingface_cache": "/workspace/anchor_navi_boris/weights/huggingface"
+  },
+  "run_options": {
+    "r2r_data": "/workspace/3d_wm_vln/StreamVLN/data/datasets/r2r/val_unseen/val_unseen.json.gz",
+    "policy": "gnm",
+    "vlm_backend": "deepseek",
+    "vlm_model": null,
+    "deepseek_env": null,
+    "deepseek_base_url": null,
+    "max_steps_per_target": null,
+    "targets": null,
+    "sequence_max_exploration_hops": null,
+    "point_selection_prompt_version": null,
+    "instruction_completion_prompt_version": null,
+    "seed": null
+  },
+  "forwarded_args": [],
+  "shard_runner": "/workspace/anchor_navi_boris/scripts/evaluate_point_navigation.py",
+  "shards": [
+    {
+      "directory": "shard_0",
+      "device": "cuda:0",
+      "episode_indices": [
+        6,
+        12,
+        41,
+        69,
+        115
+      ],
+      "episode_ids": [
+        "7",
+        "13",
+        "42",
+        "70",
+        "116"
+      ],
+      "command": [
+        "/home/dev/miniforge3/envs/anchor_navi/bin/python",
+        "/workspace/anchor_navi_boris/scripts/evaluate_point_navigation.py",
+        "--mode",
+        "semantic",
+        "--exploration-strategy",
+        "instruction-sequence-recovery",
+        "--tracking-cluster-profile",
+        "rgb_only_dense_stop_v1",
+        "--episodes",
+        "6,12,41,69,115",
+        "--output-root",
+        "/workspace/anchor_navi_boris/outputs/e2e_eval/20260910_224927_opennav10_w2/shard_0",
+        "--device",
+        "cuda:0",
+        "--r2r-data",
+        "/workspace/3d_wm_vln/StreamVLN/data/datasets/r2r/val_unseen/val_unseen.json.gz",
+        "--policy",
+        "gnm",
+        "--vlm-backend",
+        "deepseek"
+      ],
+      "returncode": 0,
+      "finished_utc": "2026-09-10T15:00:05.018892+00:00"
+    },
+    {
+      "directory": "shard_1",
+      "device": "cuda:0",
+      "episode_indices": [
+        10,
+        39,
+        51,
+        93,
+        139
+      ],
+      "episode_ids": [
+        "11",
+        "40",
+        "52",
+        "94",
+        "140"
+      ],
+      "command": [
+        "/home/dev/miniforge3/envs/anchor_navi/bin/python",
+        "/workspace/anchor_navi_boris/scripts/evaluate_point_navigation.py",
+        "--mode",
+        "semantic",
+        "--exploration-strategy",
+        "instruction-sequence-recovery",
+        "--tracking-cluster-profile",
+        "rgb_only_dense_stop_v1",
+        "--episodes",
+        "10,39,51,93,139",
+        "--output-root",
+        "/workspace/anchor_navi_boris/outputs/e2e_eval/20260910_224927_opennav10_w2/shard_1",
+        "--device",
+        "cuda:0",
+        "--r2r-data",
+        "/workspace/3d_wm_vln/StreamVLN/data/datasets/r2r/val_unseen/val_unseen.json.gz",
+        "--policy",
+        "gnm",
+        "--vlm-backend",
+        "deepseek"
+      ],
+      "returncode": 0,
+      "finished_utc": "2026-09-10T14:58:19.926622+00:00"
+    }
+  ],
+  "not_run_episode_indices": [],
+  "unscored_episode_indices": [],
+  "completed_utc": "2026-09-10T15:00:05.021567+00:00"
+}
