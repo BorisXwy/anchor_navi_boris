@@ -417,6 +417,26 @@ def collect_provider_interruptions(round_dir):
                 "shard_*/provider_interruption_*.json"))]
 
 
+def episode_trajectory_exists(shard_dir, index, episode_id):
+    """Episode directories are named by episode_id; rounds before 2026-09-10
+    used the dataset row index, so a legacy directory only counts when its
+    trajectory really belongs to this index."""
+    def trajectory_index(path):
+        try:
+            trajectory = json.loads(path.read_text())
+            return int((trajectory.get("config") or {}).get(
+                "episode_index", trajectory.get("episode_index")))
+        except (OSError, ValueError, TypeError, AttributeError,
+                json.JSONDecodeError):
+            return None
+
+    by_id = shard_dir / f"episode_{int(episode_id):04d}" / "trajectory.json"
+    if by_id.exists() and trajectory_index(by_id) in (None, index):
+        return True
+    legacy = shard_dir / f"episode_{index:04d}" / "trajectory.json"
+    return legacy.exists() and trajectory_index(legacy) == index
+
+
 def merge_shards(round_dir, shards):
     """Merge shard summaries; episodes without a score stay explicit."""
     round_dir = Path(round_dir)
@@ -433,10 +453,11 @@ def merge_shards(round_dir, shards):
             configuration = configuration or shard_summary.get("configuration")
             scored = {int(item["episode_index"]): item
                       for item in shard_summary.get("results", [])}
-        for index in shard["episode_indices"]:
+        for index, episode_id in zip(shard["episode_indices"],
+                                     shard["episode_ids"]):
             if index in scored:
                 results.append(scored[index])
-            elif (shard_dir / f"episode_{index:04d}" / "trajectory.json").exists():
+            elif episode_trajectory_exists(shard_dir, index, episode_id):
                 unscored.append(index)
             else:
                 not_run.append(index)
@@ -736,7 +757,7 @@ def orchestrate(args, forwarded_args, logger):
                f"{summary['episode_count']}")
     if summary["process_failed_episode_indices"]:
         logger.log("episode process crashed (scored as failure, see "
-                   "episode_XXXX/process.log): "
+                   "episode_<id>/process.log): "
                    f"{summary['process_failed_episode_indices']}")
     if summary["unscored_episode_indices"]:
         logger.log(f"unscored (trajectory present, shard died before scoring; "

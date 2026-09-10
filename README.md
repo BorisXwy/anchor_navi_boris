@@ -373,10 +373,13 @@ bash run_e2e_eval.sh 7 --vlm-backend heuristic --targets 1 \
 - `--all` and positional ids are the 100 OpenNav R2R-CE episode ids frozen in
   `data/opennav100_episode_ids.json`; poses always come from the official
   `val_unseen.json.gz` (the OpenNav release's `start_rotation` is wrong and
-  any `OpenNav_R2R-CE_100_bertidx*` dataset path is refused). Ids are mapped
-  to dataset indices so episode directories keep the `episode_XXXX` naming
-  that `audit_active_stop_round.py` and `verify_round_stage_completions.py`
-  expect.
+  any `OpenNav_R2R-CE_100_bertidx*` dataset path is refused). Episode
+  directories and the three-panel video are named by dataset `episode_id`
+  (`shard_N/episode_0007/episode_0007.mp4` for id 7, which is `val_unseen`
+  index 6); the dataset index stays in `trajectory.json` `config.episode_index`
+  and is what `audit_active_stop_round.py`, `verify_round_stage_completions.py`
+  and the round merge read, so rounds from before 2026-09-10 (index-named
+  `episode_XXXX/exploration.mp4`) still audit correctly.
 - Preflight checks dataset/scene/weight presence, CUDA availability, free GPU
   memory (`--gpu-memory-per-worker-gb`, default 11 GB measured per worker) and
   the DMXAPI credential without any network call; failures exit before
@@ -389,7 +392,7 @@ bash run_e2e_eval.sh 7 --vlm-backend heuristic --targets 1 \
   summaries merged through `evaluate_point_navigation.summarize_results`, with
   `process_failed_episode_indices`, `unscored_episode_indices` and
   `not_run_episode_indices` kept explicit) and `shard_N/{shard.log,
-  run_manifest.json, summary.json, episode_XXXX/}`.
+  run_manifest.json, summary.json, episode_<id>/}`.
 - No audit runs automatically; the closing log prints the
   `audit_active_stop_round.py` / `verify_round_stage_completions.py` commands.
 

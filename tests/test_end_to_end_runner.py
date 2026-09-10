@@ -31,11 +31,13 @@ STUB_SHARD_RUNNER = textwrap.dedent("""
     episodes = [int(v) for v in argv[argv.index("--episodes") + 1].split(",")]
     root = Path(argv[argv.index("--output-root") + 1])
     results = []
+    fixture_ids = {0: 7, 1: 11, 2: 13, 3: 40}
     for index in episodes:
-        episode_dir = root / f"episode_{index:04d}"
+        episode_dir = root / f"episode_{fixture_ids[index]:04d}"
         episode_dir.mkdir(parents=True, exist_ok=True)
-        (episode_dir / "trajectory.json").write_text("{}")
-        row = failed_episode_result(index, 0, episode_dir)
+        (episode_dir / "trajectory.json").write_text(
+            json.dumps({"config": {"episode_index": index}}))
+        row = failed_episode_result(index, 0, episode_dir, fixture_ids[index])
         row["simulator_reported_success"] = index % 2 == 0
         row["termination_category"] = "instruction_sequence_complete"
         results.append(row)
@@ -176,23 +178,27 @@ class MergeTest(EndToEndRunnerFixture):
         shard_0.mkdir(parents=True)
         shard_1.mkdir(parents=True)
         rows = []
-        for index in (0, 2):
-            row = failed_episode_result(index, 0, shard_0 / f"episode_{index:04d}")
+        for index, episode_id in ((0, "1"), (2, "3")):
+            episode_dir = shard_0 / f"episode_{int(episode_id):04d}"
+            row = failed_episode_result(index, 0, episode_dir, episode_id)
             row["simulator_reported_success"] = index == 2
-            (shard_0 / f"episode_{index:04d}").mkdir()
+            episode_dir.mkdir()
             if index == 2:
                 row["termination_category"] = "instruction_sequence_complete"
-                (shard_0 / f"episode_{index:04d}" / "trajectory.json").write_text("{}")
+                (episode_dir / "trajectory.json").write_text("{}")
             rows.append(row)
         (shard_0 / "summary.json").write_text(json.dumps({
             "configuration": {"device": "cuda:0"}, "results": rows}))
-        (shard_1 / "episode_0001").mkdir()
-        (shard_1 / "episode_0001" / "trajectory.json").write_text("{}")
-        (shard_1 / "provider_interruption_episode_0003.json").write_text(
-            json.dumps({"episode_index": 3, "status": "invalid"}))
+        (shard_1 / "episode_0002").mkdir()
+        (shard_1 / "episode_0002" / "trajectory.json").write_text("{}")
+        (shard_1 / "provider_interruption_episode_0004.json").write_text(
+            json.dumps({"episode_index": 3, "episode_id": "4",
+                        "status": "invalid"}))
         shards = [
-            {"directory": "shard_0", "episode_indices": [0, 2], "returncode": 0},
-            {"directory": "shard_1", "episode_indices": [1, 3], "returncode": 86},
+            {"directory": "shard_0", "episode_indices": [0, 2],
+             "episode_ids": ["1", "3"], "returncode": 0},
+            {"directory": "shard_1", "episode_indices": [1, 3],
+             "episode_ids": ["2", "4"], "returncode": 86},
         ]
         summary = runner.merge_shards(round_dir, shards)
         self.assertEqual(summary["episode_count"], 2)
@@ -210,9 +216,23 @@ class MergeTest(EndToEndRunnerFixture):
         round_dir = self.root / "empty_round"
         (round_dir / "shard_0").mkdir(parents=True)
         summary = runner.merge_shards(round_dir, [
-            {"directory": "shard_0", "episode_indices": [5], "returncode": 1}])
+            {"directory": "shard_0", "episode_indices": [5],
+             "episode_ids": ["6"], "returncode": 1}])
         self.assertEqual(summary["episode_count"], 0)
         self.assertEqual(summary["not_run_episode_indices"], [5])
+
+    def test_merge_accepts_legacy_index_named_directory_only_for_same_index(self):
+        round_dir = self.root / "legacy_round"
+        shard_0 = round_dir / "shard_0"
+        # Index-named directory from a pre-id-naming round: belongs to index 5.
+        (shard_0 / "episode_0005").mkdir(parents=True)
+        (shard_0 / "episode_0005" / "trajectory.json").write_text(
+            json.dumps({"config": {"episode_index": 5}}))
+        summary = runner.merge_shards(round_dir, [
+            {"directory": "shard_0", "episode_indices": [4, 5],
+             "episode_ids": ["5", "6"], "returncode": 1}])
+        self.assertEqual(summary["unscored_episode_indices"], [5])
+        self.assertEqual(summary["not_run_episode_indices"], [4])
 
 
 class OrchestratorTest(EndToEndRunnerFixture):
@@ -265,7 +285,8 @@ class OrchestratorTest(EndToEndRunnerFixture):
             self.assertTrue((round_dir / shard / "shard.log").exists())
             self.assertTrue((round_dir / shard / "summary.json").exists())
         self.assertTrue(
-            (round_dir / "shard_0" / "episode_0002" / "trajectory.json").exists())
+            (round_dir / "shard_0" / "episode_0013" / "trajectory.json").exists())
+        self.assertFalse((round_dir / "shard_0" / "episode_0002").exists())
         summary = json.loads((round_dir / "summary.json").read_text())
         self.assertEqual(summary["episode_count"], 3)
         self.assertEqual(summary["scored_episode_indices"], [0, 1, 2])

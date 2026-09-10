@@ -253,10 +253,15 @@ def freeze_episode_manifest(output_root, dataset_path, indices, configuration):
     return payload
 
 
-def failed_episode_result(index, returncode, output_dir):
+def episode_artifact_stem(episode_id):
+    """Name episode directories and videos by dataset episode_id, not row index."""
+    return f"episode_{int(episode_id):04d}"
+
+
+def failed_episode_result(index, returncode, output_dir, episode_id=None):
     return {
         "episode_index": index,
-        "episode_id": None,
+        "episode_id": episode_id,
         "mode": None,
         "selection_strategy": None,
         "exploration_strategy": None,
@@ -446,11 +451,15 @@ def main():
         "backtrack_max_attempts_per_hop": (
             args.backtrack_max_attempts_per_hop),
     }
-    freeze_episode_manifest(
+    manifest = freeze_episode_manifest(
         args.output_root, args.r2r_data, indices, run_configuration)
+    episode_id_by_index = {
+        int(item["episode_index"]): item["episode_id"]
+        for item in manifest["episodes"]}
     results = []
     for index in indices:
-        output_dir = args.output_root / f"episode_{index:04d}"
+        episode_id = episode_id_by_index[index]
+        output_dir = args.output_root / episode_artifact_stem(episode_id)
         trajectory_path = output_dir / "trajectory.json"
         if args.rerun or not trajectory_path.exists():
             command = [
@@ -515,15 +524,16 @@ def main():
                     "--backtrack-max-attempts-per-hop",
                     str(args.backtrack_max_attempts_per_hop),
                 ])
-            print(f"starting episode index {index}: {output_dir}", flush=True)
+            print(f"starting episode id {episode_id} (index {index}): "
+                  f"{output_dir}", flush=True)
             output_dir.mkdir(parents=True, exist_ok=True)
             with (output_dir / "process.log").open("w") as process_log:
                 completed = subprocess.run(
                     command, cwd=ROOT, check=False, stdout=process_log,
                     stderr=subprocess.STDOUT)
             print(
-                f"finished episode index {index}: returncode={completed.returncode}",
-                flush=True)
+                f"finished episode id {episode_id} (index {index}): "
+                f"returncode={completed.returncode}", flush=True)
             process_log_path = output_dir / "process.log"
             process_output = process_log_path.read_text(
                 errors="replace") if process_log_path.exists() else ""
@@ -534,6 +544,7 @@ def main():
                     "status": "invalid_external_vlm_provider_interruption",
                     "provider": args.vlm_backend,
                     "episode_index": index,
+                    "episode_id": episode_id,
                     "process_returncode": completed.returncode,
                     "process_log": str(process_log_path),
                     "completed_episode_indices_before_interruption": [
@@ -547,7 +558,7 @@ def main():
                         "contamination."),
                 }
                 interruption_path = args.output_root / (
-                    f"provider_interruption_episode_{index:04d}.json")
+                    f"provider_interruption_{episode_artifact_stem(episode_id)}.json")
                 interruption_path.write_text(
                     json.dumps(interruption, indent=2) + "\n")
                 print(
@@ -556,11 +567,12 @@ def main():
                 raise SystemExit(86)
             if completed.returncode != 0 and not trajectory_path.exists():
                 results.append(failed_episode_result(
-                    index, completed.returncode, output_dir))
+                    index, completed.returncode, output_dir, episode_id))
                 continue
 
         if not trajectory_path.exists():
-            results.append(failed_episode_result(index, None, output_dir))
+            results.append(failed_episode_result(
+                index, None, output_dir, episode_id))
             continue
 
         trajectory = json.loads(trajectory_path.read_text())
@@ -601,6 +613,7 @@ def main():
                 "status": "invalid_external_vlm_provider_interruption",
                 "provider": args.vlm_backend,
                 "episode_index": index,
+                "episode_id": episode_id,
                 "process_returncode": 0,
                 "trajectory": str(trajectory_path),
                 "completed_episode_indices_before_interruption": [
@@ -611,7 +624,7 @@ def main():
                 "reason": sequence_end_reason,
             }
             interruption_path = args.output_root / (
-                f"provider_interruption_episode_{index:04d}.json")
+                f"provider_interruption_{episode_artifact_stem(episode_id)}.json")
             interruption_path.write_text(
                 json.dumps(interruption, indent=2) + "\n")
             print(

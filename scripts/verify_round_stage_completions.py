@@ -422,13 +422,24 @@ action (such as following its landmarks or traversing it) has already occurred.
     }
 
 
+def trajectory_episode_index(trajectory, episode_dir):
+    """Episode directories are named by episode_id since 2026-09-10; the
+    dataset row index is authoritative from the trajectory config and the
+    directory suffix is only a fallback for older index-named runs."""
+    recorded = (trajectory.get("config") or {}).get(
+        "episode_index", trajectory.get("episode_index"))
+    if recorded is not None:
+        return int(recorded)
+    return int(Path(episode_dir).name.split("_")[-1])
+
+
 def verify_episode(trajectory_path, dataset_episode, backend,
                    episode_index=None):
     trajectory_path = Path(trajectory_path)
     episode_dir = trajectory_path.parent
     trajectory = json.loads(trajectory_path.read_text())
     if episode_index is None:
-        episode_index = int(episode_dir.name.split("_")[-1])
+        episode_index = trajectory_episode_index(trajectory, episode_dir)
     scored_episode = audit_episode(
         episode_index, trajectory, dataset_episode, trajectory_path)
     scored = {item["target_index"]: item
@@ -525,8 +536,8 @@ def main():
                         "one dataset episode")
                 episode_index = matches[0]
             else:
-                episode_index = int(
-                    trajectory_path.parent.name.split("_")[-1])
+                episode_index = trajectory_episode_index(
+                    trajectory, episode_dir)
             output, payload = verify_episode(
                 trajectory_path, dataset[episode_index], backend,
                 episode_index=episode_index)

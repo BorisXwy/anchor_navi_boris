@@ -198,7 +198,8 @@ def score_case(case, case_dir: Path, returncode=0):
         "backtrack_end_reason": backtrack.get("end_reason"),
         "failure_category": failure_category,
         "trajectory": str(trajectory_path),
-        "video": str(case_dir / "exploration.mp4"),
+        "video": str(case_dir / Path((trajectory.get("video") or {}).get(
+            "path", "exploration.mp4")).name),
     }
     return result
 

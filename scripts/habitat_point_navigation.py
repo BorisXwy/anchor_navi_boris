@@ -528,7 +528,7 @@ class VideoFrameSink:
         self.process = None
         self.writer = None
         if self.ffmpeg is None:
-            print("warning: ffmpeg with libx264 not found; exploration.mp4 "
+            print(f"warning: ffmpeg with libx264 not found; {self.output_path.name} "
                   "falls back to OpenCV mp4v and will not play in VS Code",
                   file=sys.stderr, flush=True)
             self.writer = cv2.VideoWriter(
@@ -1268,7 +1268,7 @@ def _run_habitat_episode(argv=None):
             position_history.append(start_position.copy())
     video_composer = ExplorationVideoComposer(
         sim, start_position, obs_width=width, obs_height=height)
-    video_path = args.output_dir / "exploration.mp4"
+    video_path = args.output_dir / f"episode_{int(episode['episode_id']):04d}.mp4"
     rendered = VideoFrameSink(video_path, video_composer.frame_size, fps=5)
 
     def emit_evaluation_video(
@@ -2220,7 +2220,7 @@ def _run_habitat_episode(argv=None):
             "node_classification.json", "backtrack_selection.json",
             "backtrack_action_history.json", "trajectory.json",
             "module_results.json", "navigation_graph/navigation_graph.json",
-            "exploration.mp4",
+            video_path.name,
         ]
         artifact_hashes = {}
         for relative in hash_paths:

@@ -14,10 +14,18 @@ from verify_round_stage_completions import (
     _node_view_paths,
     _verify_one,
     system_stage_completion_candidates,
+    trajectory_episode_index,
 )
 
 
 class RoundStageVerifierTest(unittest.TestCase):
+    def test_episode_index_comes_from_trajectory_not_id_named_directory(self):
+        # episode_0007 is episode_id 7 == dataset index 6 in val_unseen.
+        self.assertEqual(trajectory_episode_index(
+            {"config": {"episode_index": 6}}, Path("/round/shard_0/episode_0007")), 6)
+        self.assertEqual(trajectory_episode_index(
+            {}, Path("/legacy_round/episode_0006")), 6)
+
     def test_completion_verifier_prefers_saved_eight_view_panorama(self):
         node = {
             "six_views": [{"image_path": "six/old.jpg"}],

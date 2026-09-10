@@ -343,10 +343,13 @@ def audit_round(round_root: Path, dataset_path: Path):
         reference = trajectory.get("reference_state") or {}
         if reference.get("path_index") is not None:
             continue
-        for index in FIXED_EPISODES:
-            if path.parent.name == f"episode_{index:04d}":
-                trajectories[index] = (path, trajectory)
-                break
+        try:
+            index = int((trajectory.get("config") or {}).get(
+                "episode_index", trajectory.get("episode_index")))
+        except (TypeError, ValueError):
+            continue
+        if index in FIXED_EPISODES and index not in trajectories:
+            trajectories[index] = (path, trajectory)
     dataset = _load_dataset(dataset_path)
     missing = [index for index in FIXED_EPISODES if index not in trajectories]
     results = []
