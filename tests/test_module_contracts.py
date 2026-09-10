@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -1136,9 +1137,24 @@ class PlanningAndUtilityContractTest(unittest.TestCase):
             output = Path(temporary) / "layout.mp4"
             sink = VideoFrameSink(output, composer.frame_size, fps=5)
             sink.append(frame)
-            self.assertEqual(len(sink), 1)
+            sink.extend([frame, frame])
+            self.assertEqual(len(sink), 3)
             sink.close()
             self.assertGreater(output.stat().st_size, 0)
+            self.assertFalse(sink.temp_path.exists())
+            self.assertFalse(sink.error_log_path.exists())
+            decoded, fps = read_video(output, max_frames=None)
+            self.assertEqual(decoded.shape, (3, 120, 240, 3))
+            self.assertAlmostEqual(fps, 5.0)
+            if sink.codec == "h264":
+                capture = cv2.VideoCapture(str(output))
+                fourcc = int(capture.get(cv2.CAP_PROP_FOURCC))
+                capture.release()
+                self.assertIn(
+                    fourcc.to_bytes(4, "little").decode("ascii"),
+                    {"avc1", "h264"})
+            else:
+                self.skipTest("ffmpeg with libx264 unavailable; mp4v fallback")
 
     def test_visited_area_increases_with_a_distant_point(self):
         one = visited_area_estimate([[0, 0, 0]], radius=0.5, resolution=0.25)

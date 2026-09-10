@@ -12,7 +12,9 @@ import gzip
 import hashlib
 import json
 import math
+import os
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -485,18 +487,72 @@ class ExplorationVideoComposer:
         return np.concatenate([left, right], axis=1)
 
 
-class VideoFrameSink:
-    """List-like streaming MP4 sink used by all exploration visualizations."""
+def resolve_h264_ffmpeg():
+    """Return an ffmpeg binary that has libx264, or None."""
+    candidates = [os.environ.get("NAVI_FFMPEG_BIN"), shutil.which("ffmpeg"),
+                  "/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+    for candidate in dict.fromkeys(c for c in candidates if c):
+        try:
+            probe = subprocess.run(
+                [candidate, "-hide_banner", "-encoders"], capture_output=True,
+                text=True, timeout=10, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if probe.returncode == 0 and "libx264" in probe.stdout:
+            return candidate
+    return None
 
-    def __init__(self, output_path, frame_size, fps=5):
+
+class VideoFrameSink:
+    """List-like streaming MP4 sink used by all exploration visualizations.
+
+    Frames are piped to ffmpeg/libx264 (yuv420p, avc1, faststart) so the file
+    plays in browser-based viewers such as VS Code; OpenCV's ``mp4v`` output
+    is MPEG-4 Part 2, which those players cannot decode.  ffmpeg is only used
+    as a CPU encoder and never touches the GPU.
+    """
+
+    def __init__(self, output_path, frame_size, fps=5, crf=20,
+                 preset="veryfast"):
         self.output_path = Path(output_path)
         self.frame_size = tuple(map(int, frame_size))
-        self.writer = cv2.VideoWriter(
-            str(self.output_path), cv2.VideoWriter_fourcc(*"mp4v"),
-            float(fps), self.frame_size)
-        if not self.writer.isOpened():
-            raise RuntimeError(f"Failed to open video writer: {self.output_path}")
+        self.fps = float(fps)
         self.frame_count = 0
+        self.temp_path = self.output_path.with_name(
+            self.output_path.stem + ".tmp" + self.output_path.suffix)
+        self.error_log_path = self.output_path.with_name(
+            self.output_path.stem + ".tmp.ffmpeg.log")
+        self.ffmpeg = resolve_h264_ffmpeg()
+        self.codec = "h264" if self.ffmpeg else "mp4v"
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.process = None
+        self.writer = None
+        if self.ffmpeg is None:
+            print("warning: ffmpeg with libx264 not found; exploration.mp4 "
+                  "falls back to OpenCV mp4v and will not play in VS Code",
+                  file=sys.stderr, flush=True)
+            self.writer = cv2.VideoWriter(
+                str(self.output_path), cv2.VideoWriter_fourcc(*"mp4v"),
+                self.fps, self.frame_size)
+            if not self.writer.isOpened():
+                raise RuntimeError(
+                    f"Failed to open video writer: {self.output_path}")
+            return
+        width, height = self.frame_size
+        # yuv420p needs even dimensions; the last row/column is duplicated.
+        self.encoded_size = (width + width % 2, height + height % 2)
+        self._error_handle = self.error_log_path.open("wb")
+        self.process = subprocess.Popen([
+            self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+            "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
+            "-s:v", "{}x{}".format(*self.encoded_size),
+            "-r", f"{self.fps:.8g}",
+            "-i", "pipe:0", "-map_metadata", "-1", "-an",
+            "-c:v", "libx264", "-preset", preset, "-crf", str(int(crf)),
+            "-pix_fmt", "yuv420p", "-tag:v", "avc1",
+            "-movflags", "+faststart", str(self.temp_path),
+        ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=self._error_handle)
 
     def append(self, frame):
         expected_w, expected_h = self.frame_size
@@ -504,17 +560,52 @@ class VideoFrameSink:
             raise ValueError(
                 f"video frame is {frame.shape[1]}x{frame.shape[0]}, expected "
                 f"{expected_w}x{expected_h}")
-        self.writer.write(frame)
+        array = np.ascontiguousarray(np.asarray(frame, np.uint8)[..., :3])
+        if self.process is not None:
+            pad_h, pad_w = expected_h % 2, expected_w % 2
+            if pad_h or pad_w:
+                array = np.ascontiguousarray(np.pad(
+                    array, ((0, pad_h), (0, pad_w), (0, 0)), mode="edge"))
+            try:
+                self.process.stdin.write(array.tobytes())
+            except BrokenPipeError as error:
+                raise RuntimeError(
+                    f"ffmpeg stopped accepting frames: {self._ffmpeg_error()}"
+                ) from error
+        else:
+            self.writer.write(array)
         self.frame_count += 1
 
     def extend(self, frames):
         for frame in frames:
             self.append(frame)
 
+    def _ffmpeg_error(self):
+        try:
+            return self.error_log_path.read_text(errors="replace")[-2000:]
+        except OSError:
+            return ""
+
     def close(self):
         if self.writer is not None:
             self.writer.release()
             self.writer = None
+            return
+        if self.process is None:
+            return
+        process, self.process = self.process, None
+        process.stdin.close()
+        try:
+            returncode = process.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            returncode = process.wait()
+        self._error_handle.close()
+        if returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg exited with {returncode}: {self._ffmpeg_error()}")
+        self.temp_path.replace(self.output_path)
+        self.error_log_path.unlink(missing_ok=True)
 
     def __len__(self):
         return self.frame_count
@@ -1925,6 +2016,7 @@ def _run_habitat_episode(argv=None):
         "continuous_scan_frames": len(motion_log),
         "video": {
             "path": str(video_path), "frame_count": video_frame_count,
+            "codec": rendered.codec,
             "fps": 5, "frame_size_wh": list(video_composer.frame_size),
             "layout": "left_live_obs__upper_right_instruction__lower_right_topdown",
         },
