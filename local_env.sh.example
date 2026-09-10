@@ -1,0 +1,51 @@
+# Machine-local runtime environment for anchor_navi_boris.
+# Copy to local_env.sh (gitignored, chmod 600), fill in the relay key, then
+# `source local_env.sh` before running anything. Python entry points also scan
+# this file directly for the `export KEY=VALUE` lines below, so credentials
+# resolve even when the shell was not sourced.
+
+eval "$(conda shell.bash hook)"
+conda activate anchor_navi
+
+export ANCHOR_NAVI_ROOT="/workspace/anchor_navi_boris"
+
+# HuggingFace cache pre-populated via hf-mirror (huggingface.co is unreachable
+# from this host); force offline mode so transformers never probes the hub.
+export HF_HOME="$ANCHOR_NAVI_ROOT/weights/huggingface"
+export HF_ENDPOINT="https://hf-mirror.com"
+export HF_HUB_OFFLINE=1
+
+# Habitat headless rendering.
+export MAGNUM_LOG=quiet
+export HABITAT_SIM_LOG=quiet
+
+# Grounded-SAM ablation backend (--semantic-detector grounded-sam /
+# --floor-segmenter grounded-sam).
+export POINT_TRACKER_GROUNDED_SAM_ROOT="/workspace/Navi-Agent/third_party/Grounded-Segment-Anything"
+export POINT_TRACKER_GROUNDED_SAM_DINO_CHECKPOINT="/workspace/Navi-Agent/data/models/groundingdino_swint_ogc.pth"
+export POINT_TRACKER_GROUNDED_SAM_SAM_CHECKPOINT="/workspace/Navi-Agent/data/models/sam_vit_h_4b8939.pth"
+export POINT_TRACKER_GROUNDED_SAM_BERT_PATH="/workspace/Navi-Agent/weights/bert-base-uncased"
+
+# scripts/ is not a package; tests and standalone scripts expect it on sys.path.
+export PYTHONPATH="$ANCHOR_NAVI_ROOT/scripts${PYTHONPATH:+:$PYTHONPATH}"
+
+cd "$ANCHOR_NAVI_ROOT"
+
+# Cloud VLM through the DMXAPI OpenAI-compatible relay. The historical
+# OpenRouter variable names are shared with Navi-Agent's Final Method so this
+# block can be copied between the two projects verbatim. DEEPSEEK_* names in
+# .env.deepseek remain a lower-priority fallback.
+export NAVI_LLM_BACKEND="openrouter"
+export NAVI_OPENROUTER_MODEL="deepseek-v4-flash-vision-exp"
+export OPENROUTER_API_KEY="your_dmxapi_key_here"
+export OPENROUTER_API_URL="https://www.dmxapi.cn/v1/chat/completions"
+# deepseek-v4-flash-vision-exp thinks by default (6k+ reasoning tokens, ~60 s
+# per call); DMXAPI requires the explicit thinking switch to turn it off.
+export NAVI_LLM_DISABLE_THINKING=1
+# Relay traffic must never depend on the manual mihomo proxy; ignore any
+# inherited http(s)_proxy variables.
+export NAVI_OPENROUTER_DISABLE_PROXY=1
+# Optional HTTP retry tuning (408/429/5xx and timeouts): exponential backoff
+# min(cap, base**attempt + jitter).
+# export LLM_HTTP_RETRY_BASE_S=2
+# export LLM_HTTP_RETRY_CAP_S=40

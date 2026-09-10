@@ -1,6 +1,8 @@
-# Local credentials. Never commit these files.
+# Local credentials and machine-local environment. Never commit these files.
 .env.deepseek
 .env
+local_env.sh
+CLAUDE.md
 
 # Generated outputs and Python caches.
 outputs/
