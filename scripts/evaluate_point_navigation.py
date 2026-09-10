@@ -781,6 +781,50 @@ def main():
             "trajectory": str(trajectory_path),
         })
 
+    summary = summarize_results(results, indices, args.mode, {
+        "exploration_strategy": args.exploration_strategy,
+        "policy": args.policy,
+        "device": args.device,
+        "vlm_backend": args.vlm_backend,
+        "vlm_model": args.vlm_model or "backend_default",
+        "semantic_detector": args.semantic_detector,
+        "floor_segmenter": args.floor_segmenter,
+        "detector_box_threshold": args.detector_box_threshold,
+        "detector_text_threshold": args.detector_text_threshold,
+        "adaptive_floor_threshold": args.adaptive_floor_threshold,
+        "views": args.views,
+        "skip_instruction_completion": args.skip_instruction_completion,
+        "point_selection_prompt_version": (
+            args.point_selection_prompt_version),
+        "instruction_completion_prompt_version": (
+            args.instruction_completion_prompt_version),
+        "tracking_cluster_profile": args.tracking_cluster_profile,
+        "seed": args.seed,
+        "vlm_timeout": args.vlm_timeout,
+        "vlm_retries": args.vlm_retries,
+        "max_steps_per_target": args.max_steps_per_target,
+        "max_exploration_targets": args.max_exploration_targets,
+        "full_space_coverage_threshold": (
+            args.full_space_coverage_threshold),
+        "coverage_samples": args.coverage_samples,
+        "sequence_max_exploration_hops": (
+            args.sequence_max_exploration_hops),
+        "sequence_min_classification_confidence": (
+            args.sequence_min_classification_confidence),
+        "sequence_recovery_backtrack_attempts": (
+            args.sequence_recovery_backtrack_attempts),
+        "backtrack_planner_profile": args.backtrack_planner_profile,
+        "backtrack_max_attempts_per_hop": (
+            args.backtrack_max_attempts_per_hop),
+    })
+    summary_path = args.output_root / "summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2) + "\n")
+    print(json.dumps(summary, indent=2))
+    print(f"summary: {summary_path}")
+
+
+def summarize_results(results, indices, mode, configuration):
+    """Aggregate per-episode result rows into the frozen summary schema."""
     total_attempted = sum(item["targets_attempted"] for item in results)
     total_arrived = sum(item["targets_arrived"] for item in results)
     total_reference_reached = sum(
@@ -812,50 +856,15 @@ def main():
         item["sequence_classifications"] for item in results)
     total_classifications_accepted = sum(
         item["sequence_classifications_accepted"] for item in results)
-    summary = {
+    return {
         "episode_count": len(results),
         "episode_process_success_rate": sum(
             item.get("process_returncode", 0) in (None, 0) and
             Path(item["trajectory"]).exists() for item in results
         ) / len(results),
-        "episode_indices": indices,
-        "mode": args.mode,
-        "configuration": {
-            "exploration_strategy": args.exploration_strategy,
-            "policy": args.policy,
-            "device": args.device,
-            "vlm_backend": args.vlm_backend,
-            "vlm_model": args.vlm_model or "backend_default",
-            "semantic_detector": args.semantic_detector,
-            "floor_segmenter": args.floor_segmenter,
-            "detector_box_threshold": args.detector_box_threshold,
-            "detector_text_threshold": args.detector_text_threshold,
-            "adaptive_floor_threshold": args.adaptive_floor_threshold,
-            "views": args.views,
-            "skip_instruction_completion": args.skip_instruction_completion,
-            "point_selection_prompt_version": (
-                args.point_selection_prompt_version),
-            "instruction_completion_prompt_version": (
-                args.instruction_completion_prompt_version),
-            "tracking_cluster_profile": args.tracking_cluster_profile,
-            "seed": args.seed,
-            "vlm_timeout": args.vlm_timeout,
-            "vlm_retries": args.vlm_retries,
-            "max_steps_per_target": args.max_steps_per_target,
-            "max_exploration_targets": args.max_exploration_targets,
-            "full_space_coverage_threshold": (
-                args.full_space_coverage_threshold),
-            "coverage_samples": args.coverage_samples,
-            "sequence_max_exploration_hops": (
-                args.sequence_max_exploration_hops),
-            "sequence_min_classification_confidence": (
-                args.sequence_min_classification_confidence),
-            "sequence_recovery_backtrack_attempts": (
-                args.sequence_recovery_backtrack_attempts),
-            "backtrack_planner_profile": args.backtrack_planner_profile,
-            "backtrack_max_attempts_per_hop": (
-                args.backtrack_max_attempts_per_hop),
-        },
+        "episode_indices": list(indices),
+        "mode": mode,
+        "configuration": dict(configuration),
         "totals": {
             "targets_attempted": total_attempted,
             "targets_arrived": total_arrived,
@@ -970,10 +979,6 @@ def main():
         },
         "results": results,
     }
-    summary_path = args.output_root / "summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2) + "\n")
-    print(json.dumps(summary, indent=2))
-    print(f"summary: {summary_path}")
 
 
 if __name__ == "__main__":

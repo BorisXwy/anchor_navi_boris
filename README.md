@@ -350,6 +350,49 @@ decision to explore or backtrack after `unknown` is not an output or accuracy
 claim of the completion module. Successful backtracking still writes a visual
 loop-closure edge.
 
+## End-to-end evaluation launcher
+
+`run_e2e_eval.sh` (thin wrapper over `scripts/run_end_to_end_eval.py`) mirrors
+the usage of VLN-CE-master's `run_final_method_eval.sh`: one episode, an
+explicit id list, the full OpenNav100 set, parallel shards and a preflight-only
+dry run.
+
+```bash
+bash run_e2e_eval.sh 7                       # one OpenNav episode id
+bash run_e2e_eval.sh 7,11,13 --workers 2     # explicit ids, two parallel shards
+bash run_e2e_eval.sh --all --workers 2       # all 100 OpenNav ids
+bash run_e2e_eval.sh --episode-indices 0,3,6,9,18,27,45,126,204,219   # ten-EP protocol
+bash run_e2e_eval.sh --dry-run 7             # preflight only, nothing launched
+bash run_e2e_eval.sh --list                  # ids with dataset index and scene
+bash run_e2e_eval.sh --resume outputs/e2e_eval/<round>   # retry unfinished episodes
+# smoke without VLM cost (heuristic backend is a rule stub, test only)
+bash run_e2e_eval.sh 7 --vlm-backend heuristic --targets 1 \
+  --max-steps-per-target 12 --sequence-max-exploration-hops 1 --run-tag smoke
+```
+
+- `--all` and positional ids are the 100 OpenNav R2R-CE episode ids frozen in
+  `data/opennav100_episode_ids.json`; poses always come from the official
+  `val_unseen.json.gz` (the OpenNav release's `start_rotation` is wrong and
+  any `OpenNav_R2R-CE_100_bertidx*` dataset path is refused). Ids are mapped
+  to dataset indices so episode directories keep the `episode_XXXX` naming
+  that `audit_active_stop_round.py` and `verify_round_stage_completions.py`
+  expect.
+- Preflight checks dataset/scene/weight presence, CUDA availability, free GPU
+  memory (`--gpu-memory-per-worker-gb`, default 11 GB measured per worker) and
+  the DMXAPI credential without any network call; failures exit before
+  anything is created.
+- Each worker is one sequential `evaluate_point_navigation.py` process in
+  `<round>/shard_N/`, so scoring, the RGB-only contract audit and the provider
+  interruption guard are unchanged. Unknown options are forwarded to it.
+- The round directory holds `manifest.json` (selection, config, git commit,
+  shard assignment, return codes), `process.log`, `summary.json` (shard
+  summaries merged through `evaluate_point_navigation.summarize_results`, with
+  `process_failed_episode_indices`, `unscored_episode_indices` and
+  `not_run_episode_indices` kept explicit) and `shard_N/{shard.log,
+  run_manifest.json, summary.json, episode_XXXX/}`.
+- No audit runs automatically; the closing log prints the
+  `audit_active_stop_round.py` / `verify_round_stage_completions.py` commands.
+
 ## Point navigation executor API
 
 All post-selection control is consolidated in
