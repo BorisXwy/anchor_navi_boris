@@ -93,34 +93,45 @@ trained on ground-robot camera data, not Habitat, so the demo validates the
 adapter and tensor contract; benchmark-quality closed-loop performance requires
 camera calibration, waypoint scaling, collision checking, and domain adaptation.
 
-## DeepSeek multimodal VLM configuration
+## Cloud VLM configuration (DMXAPI relay)
 
-Semantic navigation now defaults to DeepSeek's multimodal Chat Completions API
-and model `deepseek-v4-flash-vision-exp`. Paste the key into the ignored local
-file `.env.deepseek`:
-
-```dotenv
-DEEPSEEK_API_KEY=your_key_here
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_VLM_MODEL=deepseek-v4-flash-vision-exp
-DEEPSEEK_THINKING=disabled
-```
-
-The file is read directly by the harness, so it does not need to be sourced.
-It is permission mode 600 and is excluded by `.gitignore`. Validate the key and
-multimodal request format with one small request:
+Semantic navigation uses the DeepSeek multimodal model
+`deepseek-v4-flash-vision-exp` through the DMXAPI OpenAI-compatible relay
+(`https://www.dmxapi.cn/v1/chat/completions`), the same route as Navi-Agent's
+Final Method. Copy `local_env.sh.example` to the ignored `local_env.sh`
+(`chmod 600`), fill in the key, and `source local_env.sh` before running:
 
 ```bash
-.venv/bin/python scripts/check_deepseek_vlm.py
+export NAVI_LLM_BACKEND="openrouter"          # historical name, routes to DMXAPI
+export NAVI_OPENROUTER_MODEL="deepseek-v4-flash-vision-exp"
+export OPENROUTER_API_KEY="your_dmxapi_key_here"
+export OPENROUTER_API_URL="https://www.dmxapi.cn/v1/chat/completions"
+export NAVI_LLM_DISABLE_THINKING=1            # vision-exp thinks by default (~60 s/call)
+export NAVI_OPENROUTER_DISABLE_PROXY=1        # ignore inherited http(s)_proxy
+```
+
+`DeepSeekBackend` resolves every setting as explicit argument > environment >
+`.env.deepseek` (legacy `DEEPSEEK_*` names, optional) > a direct scan of the
+`export` lines in `local_env.sh` > built-in default, so Python entry points
+also work when the shell was not sourced. Requests carry
+`Authorization: Bearer`, `response_format={"type":"json_object"}` and
+`thinking={"type":"disabled"}`; HTTP 408/429/5xx and timeouts are retried with
+exponential backoff (`LLM_HTTP_RETRY_BASE_S`, `LLM_HTTP_RETRY_CAP_S`), while
+401/402/403 abort the run as `VLMProviderFatalError`. Placeholder keys
+(`your_dmxapi_key_here`) are rejected before any network call. Validate the
+configuration with one small request:
+
+```bash
+python scripts/check_deepseek_vlm.py
 ```
 
 Each navigation request sends an OpenAI-compatible user content array containing
 one text block followed by JPEG `image_url` data-URL blocks. The response is
-requested as a JSON object and validated against the task schema. Non-thinking
-mode is used for short, reliable structured navigation decisions; change the
-last setting to `enabled` only when a larger reasoning-token budget is desired.
-Ollama remains
-available via `--vlm-backend ollama --vlm-model llama3.2-vision:latest`.
+validated against the task schema, and `vlm_calls.json` records `usage`,
+`finish_reason` and a `call_meta` block (endpoint, credential source, attempts,
+HTTP status, elapsed time) per call. The CLI backend name stays
+`--vlm-backend deepseek`. Ollama remains available via
+`--vlm-backend ollama --vlm-model llama3.2-vision:latest`.
 
 ## Five-target point-guided random exploration
 

@@ -494,7 +494,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("round_root", type=Path)
     parser.add_argument("--dataset", type=Path, required=True)
-    parser.add_argument("--deepseek-env", type=Path, required=True)
+    parser.add_argument("--deepseek-env", type=Path, default=None,
+                        help="optional KEY=VALUE file; relay credentials "
+                             "otherwise come from the environment / local_env.sh")
     parser.add_argument("--model", default=None)
     args = parser.parse_args()
     dataset = _load_dataset(args.dataset)

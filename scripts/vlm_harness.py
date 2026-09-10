@@ -7,7 +7,10 @@ import io
 import json
 import math
 import os
+import random
 import re
+import socket
+import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
@@ -24,7 +27,17 @@ from instruction_completion_evidence import (
 
 DEFAULT_OLLAMA_MODEL = "llama3.2-vision:latest"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash-vision-exp"
-DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+# The cloud VLM is reached through the DMXAPI OpenAI-compatible relay.  The
+# historical OpenRouter variable names below are shared with Navi-Agent's
+# Final Method so one local_env.sh block configures both projects; the older
+# DEEPSEEK_* names stay as compatibility fallbacks.
+DEFAULT_DEEPSEEK_BASE_URL = "https://www.dmxapi.cn/v1"
+RELAY_API_KEY_ENV = ("OPENROUTER_API_KEY", "DEEPSEEK_API_KEY")
+RELAY_API_URL_ENV = ("OPENROUTER_API_URL", "DEEPSEEK_BASE_URL")
+RELAY_MODEL_ENV = ("NAVI_OPENROUTER_MODEL", "DEEPSEEK_VLM_MODEL")
+RELAY_PLACEHOLDER_KEYS = {"your_openrouter_key_here", "your_dmxapi_key_here"}
+RELAY_RETRYABLE_HTTP = {408, 429, 500, 502, 503, 504}
+LOCAL_ENV_SH_PATH = Path(__file__).resolve().parents[1] / "local_env.sh"
 
 
 def compound_terminal_extent_portal_stage(item):
@@ -66,6 +79,9 @@ class VLMProviderFatalError(Exception):
 def default_vlm_model(backend_name):
     """Return the project default model for a configured backend."""
     if backend_name == "deepseek":
+        for key in RELAY_MODEL_ENV:
+            if os.environ.get(key, "").strip():
+                return os.environ[key].strip()
         return DEFAULT_DEEPSEEK_MODEL
     return DEFAULT_OLLAMA_MODEL
 
@@ -676,8 +692,16 @@ def ambiguous_landmark_executable_view(
     return best if ground(best) >= required else selected_index
 
 
-def _read_env_file(path):
-    """Read the small KEY=VALUE file used for local API configuration."""
+_ENV_ASSIGNMENT = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+
+
+def _read_env_file(path, strict=True):
+    """Read KEY=VALUE / export KEY=VALUE lines used for local API configuration.
+
+    With ``strict=False`` any line that is not a plain assignment is skipped so
+    a real shell script such as ``local_env.sh`` (conda activation, ``cd``,
+    ``eval`` lines) can be scanned for exported credentials without sourcing it.
+    """
     if path is None:
         return {}
     path = Path(path).expanduser()
@@ -688,17 +712,37 @@ def _read_env_file(path):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        if line.startswith("export "):
-            line = line[7:].lstrip()
-        if "=" not in line:
-            raise RuntimeError(
-                f"Invalid environment entry at {path}:{line_number}; expected KEY=VALUE")
-        key, value = line.split("=", 1)
-        key, value = key.strip(), value.strip()
+        match = _ENV_ASSIGNMENT.match(line)
+        if match is None:
+            if strict:
+                raise RuntimeError(
+                    f"Invalid environment entry at {path}:{line_number}; expected KEY=VALUE")
+            continue
+        key, value = match.group(1), match.group(2).strip()
         if value[:1] == value[-1:] and value[:1] in {'"', "'"}:
             value = value[1:-1]
         values[key] = value
     return values
+
+
+def _valid_api_key(value):
+    normalized = str(value or "").strip()
+    return bool(
+        normalized and normalized not in RELAY_PLACEHOLDER_KEYS
+        and not normalized.startswith("${"))
+
+
+def _normalize_base_url(url):
+    """Accept either a bare API root or a full .../chat/completions endpoint."""
+    normalized = str(url or "").strip().rstrip("/")
+    suffix = "/chat/completions"
+    if normalized.endswith(suffix):
+        normalized = normalized[:-len(suffix)]
+    return normalized or DEFAULT_DEEPSEEK_BASE_URL
+
+
+def _truthy(value):
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_json_object(content):
@@ -788,31 +832,83 @@ class OllamaBackend(VLMBackend):
 
 
 class DeepSeekBackend(VLMBackend):
-    """DeepSeek's OpenAI-compatible multimodal Chat Completions backend."""
+    """DeepSeek vision model behind an OpenAI-compatible relay (DMXAPI).
+
+    Configuration precedence for every setting is: explicit argument >
+    environment > ``.env.deepseek`` (``env_file``) > repository ``local_env.sh``
+    > built-in default.  Environment/file lookups try the Navi-Agent relay
+    names first (``OPENROUTER_API_KEY``, ``OPENROUTER_API_URL``,
+    ``NAVI_OPENROUTER_MODEL``, ``NAVI_LLM_DISABLE_THINKING``) and then the
+    older ``DEEPSEEK_*`` names.
+    """
 
     def __init__(self, model=None, base_url=None, api_key=None, env_file=None,
-                 timeout=180, image_detail="high", thinking=None):
-        file_values = _read_env_file(env_file)
+                 timeout=180, image_detail="high", thinking=None,
+                 local_env_path=LOCAL_ENV_SH_PATH, disable_proxy=None,
+                 max_attempts=3, retry_base_s=None, retry_cap_s=None):
         self.env_file = Path(env_file).expanduser() if env_file is not None else None
-        self.api_key = (
-            api_key or os.environ.get("DEEPSEEK_API_KEY") or
-            file_values.get("DEEPSEEK_API_KEY", ""))
-        self.base_url = (
-            base_url or os.environ.get("DEEPSEEK_BASE_URL") or
-            file_values.get("DEEPSEEK_BASE_URL") or DEFAULT_DEEPSEEK_BASE_URL
-        ).rstrip("/")
+        self.local_env_path = (
+            Path(local_env_path).expanduser() if local_env_path is not None else None)
+        # (source label, mapping) in precedence order after explicit arguments.
+        self._sources = [("environment", os.environ)]
+        if self.env_file is not None:
+            self._sources.append((str(self.env_file), _read_env_file(self.env_file)))
+        if self.local_env_path is not None:
+            self._sources.append((
+                str(self.local_env_path),
+                _read_env_file(self.local_env_path, strict=False)))
+
+        if api_key:
+            self.api_key, self.credential_source = api_key, "argument"
+        else:
+            self.api_key, self.credential_source = self._lookup(RELAY_API_KEY_ENV)
+        if not _valid_api_key(self.api_key):
+            self.api_key = ""
+        self.base_url = _normalize_base_url(
+            base_url or self._lookup(RELAY_API_URL_ENV)[0] or DEFAULT_DEEPSEEK_BASE_URL)
         self.model = (
-            model or os.environ.get("DEEPSEEK_VLM_MODEL") or
-            file_values.get("DEEPSEEK_VLM_MODEL") or DEFAULT_DEEPSEEK_MODEL)
-        self.thinking = (
-            thinking or os.environ.get("DEEPSEEK_THINKING") or
-            file_values.get("DEEPSEEK_THINKING") or "disabled")
+            model or self._lookup(RELAY_MODEL_ENV)[0] or DEFAULT_DEEPSEEK_MODEL)
+        self.thinking = thinking or self._resolve_thinking()
         if self.thinking not in {"enabled", "disabled"}:
             raise RuntimeError("DEEPSEEK_THINKING must be enabled or disabled")
+        if disable_proxy is None:
+            configured = self._lookup(("NAVI_OPENROUTER_DISABLE_PROXY",))[0]
+            disable_proxy = True if configured == "" else _truthy(configured)
+        self.disable_proxy = bool(disable_proxy)
+        # An empty ProxyHandler drops any inherited http(s)_proxy variables so
+        # relay traffic never depends on the manual mihomo proxy being up.
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.timeout = timeout
         self.image_detail = image_detail
+        self.max_attempts = max(1, int(max_attempts))
+        self.retry_base_s = float(
+            retry_base_s if retry_base_s is not None
+            else self._lookup(("LLM_HTTP_RETRY_BASE_S",))[0] or 2.0)
+        self.retry_cap_s = float(
+            retry_cap_s if retry_cap_s is not None
+            else self._lookup(("LLM_HTTP_RETRY_CAP_S",))[0] or 40.0)
         self.last_usage = None
         self.last_finish_reason = None
+        self.last_call_meta = None
+
+    def _lookup(self, keys):
+        """Return (value, source) for the first non-empty key across sources."""
+        for label, mapping in self._sources:
+            for key in keys:
+                value = str(mapping.get(key, "") or "").strip()
+                if value:
+                    return value, f"{label}:{key}"
+        return "", None
+
+    def _resolve_thinking(self):
+        disable_flag = self._lookup(("NAVI_LLM_DISABLE_THINKING",))[0]
+        if disable_flag:
+            return "disabled" if _truthy(disable_flag) else "enabled"
+        return self._lookup(("DEEPSEEK_THINKING",))[0] or "disabled"
+
+    @property
+    def endpoint(self):
+        return f"{self.base_url}/chat/completions"
 
     @staticmethod
     def _encode_data_url(image):
@@ -830,12 +926,24 @@ class DeepSeekBackend(VLMBackend):
             return 1024
         return 512
 
+    def _open(self, request):
+        if self.disable_proxy:
+            return self._opener.open(request, timeout=self.timeout)
+        return urllib.request.urlopen(request, timeout=self.timeout)
+
+    def _post_once(self, request):
+        """One HTTP round trip; returns (parsed JSON body, http status)."""
+        with self._open(request) as response:
+            return json.load(response), getattr(response, "status", 200)
+
     def generate_json(self, prompt, images, schema):
         if not self.api_key:
-            location = f" in {self.env_file}" if self.env_file else ""
+            locations = " / ".join(
+                str(path) for path in (self.local_env_path, self.env_file) if path)
             raise VLMProviderFatalError(
-                "DeepSeek API key is missing; set DEEPSEEK_API_KEY"
-                f"{location} before running semantic navigation")
+                "DeepSeek relay API key is missing or a placeholder; export "
+                "OPENROUTER_API_KEY (or DEEPSEEK_API_KEY) in "
+                f"{locations or 'the environment'} before running semantic navigation")
 
         schema_text = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
         content = [{
@@ -861,7 +969,7 @@ class DeepSeekBackend(VLMBackend):
             "max_tokens": self._token_limit(schema),
         }
         request = urllib.request.Request(
-            f"{self.base_url}/chat/completions",
+            self.endpoint,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {self.api_key}",
@@ -870,21 +978,47 @@ class DeepSeekBackend(VLMBackend):
             },
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                result = json.load(response)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:1000]
-            message = (
-                f"DeepSeek HTTP {exc.code} at {self.base_url}: {detail}")
-            if exc.code in {401, 402, 403}:
-                raise VLMProviderFatalError(message) from exc
-            raise RuntimeError(message) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
+        self.last_call_meta = {
+            "endpoint": self.endpoint,
+            "model": self.model,
+            "credential_source": self.credential_source,
+            "thinking": self.thinking,
+            "proxy_disabled": self.disable_proxy,
+            "attempts": 0,
+            "http_status": None,
+            "elapsed_ms": None,
+        }
+        started = time.monotonic()
+        result = None
+        last_error = None
+        for attempt in range(self.max_attempts):
+            self.last_call_meta["attempts"] = attempt + 1
+            try:
+                result, status = self._post_once(request)
+                self.last_call_meta["http_status"] = status
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")[:1000]
+                self.last_call_meta["http_status"] = exc.code
+                message = f"DeepSeek HTTP {exc.code} at {self.base_url}: {detail}"
+                if exc.code in {401, 402, 403}:
+                    raise VLMProviderFatalError(message) from exc
+                if exc.code not in RELAY_RETRYABLE_HTTP:
+                    raise RuntimeError(message) from exc
+                last_error = RuntimeError(message)
+            except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+                last_error = RuntimeError(
+                    f"DeepSeek request failed at {self.base_url}: {exc}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("DeepSeek returned a non-JSON HTTP response") from exc
+            if attempt + 1 < self.max_attempts:
+                time.sleep(min(self.retry_cap_s,
+                               self.retry_base_s ** attempt + random.random()))
+        self.last_call_meta["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+        if result is None:
             raise RuntimeError(
-                f"DeepSeek request failed at {self.base_url}: {exc}") from exc
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("DeepSeek returned a non-JSON HTTP response") from exc
+                f"{last_error} (after {self.last_call_meta['attempts']} attempts)"
+            ) from last_error
 
         choices = result.get("choices") or []
         if not choices:
@@ -1022,12 +1156,12 @@ class HeuristicBackend(VLMBackend):
 
 def build_vlm_backend(name, model=None, host="http://127.0.0.1:11434", timeout=180,
                       *, deepseek_env_file=None, deepseek_base_url=None,
-                      deepseek_api_key=None):
+                      deepseek_api_key=None, max_attempts=3):
     factories = {
         "ollama": lambda: OllamaBackend(model or DEFAULT_OLLAMA_MODEL, host, timeout),
         "deepseek": lambda: DeepSeekBackend(
             model=model, base_url=deepseek_base_url, api_key=deepseek_api_key,
-            env_file=deepseek_env_file, timeout=timeout),
+            env_file=deepseek_env_file, timeout=timeout, max_attempts=max_attempts),
         "heuristic": HeuristicBackend,
     }
     if name not in factories:
@@ -1821,6 +1955,8 @@ class NavigationVLMHarness:
                     call["usage"] = self.backend.last_usage
                 if getattr(self.backend, "last_finish_reason", None) is not None:
                     call["finish_reason"] = self.backend.last_finish_reason
+                if getattr(self.backend, "last_call_meta", None) is not None:
+                    call["call_meta"] = dict(self.backend.last_call_meta)
                 self.attempts.append({**call, "status": "success"})
                 self.calls.append(call)
                 self.flush()
@@ -1830,7 +1966,7 @@ class NavigationVLMHarness:
                     "task": task, "attempt": attempt,
                     "status": "provider_fatal", "error": str(exc),
                     "prompt": attempt_prompt, "image_paths": image_paths,
-                    "schema": schema,
+                    "schema": schema, **self._backend_call_meta(),
                 })
                 self.flush()
                 raise
@@ -1840,10 +1976,15 @@ class NavigationVLMHarness:
                     "task": task, "attempt": attempt, "status": "error",
                     "error": str(exc), "prompt": attempt_prompt,
                     "image_paths": image_paths, "schema": schema,
+                    **self._backend_call_meta(),
                 })
                 self.flush()
                 prompt += f"\nPrevious response was invalid: {exc}. Return corrected JSON only."
         raise RuntimeError(f"VLM harness exhausted retries for {task}: {errors}")
+
+    def _backend_call_meta(self):
+        meta = getattr(self.backend, "last_call_meta", None)
+        return {"call_meta": dict(meta)} if meta else {}
 
     def flush(self):
         if self.log_path:
