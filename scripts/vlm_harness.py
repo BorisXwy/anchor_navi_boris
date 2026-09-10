@@ -1066,6 +1066,16 @@ class HeuristicBackend(VLMBackend):
                 "reason": "heuristic endpoint-role test backend",
                 "visual_evidence": "node X precedes node Y",
             }
+        if "You are the RGB-only edge completion judge" in prompt:
+            # A rule stub cannot see semantic change, so it never claims
+            # completion; this keeps key-free smoke runs alive past arrival.
+            return {
+                "status": "unknown",
+                "confidence": 0.5,
+                "reason": "heuristic rgb-only edge judge test backend",
+                "visual_evidence": "test backend does not inspect RGB",
+                "temporal_evidence": "no chronological evidence evaluated",
+            }
         if "EDGE_INSTRUCTION_COMPLETION_JUDGMENT" in prompt:
             if "endpoint_evidence" in schema.get("properties", {}):
                 return {
@@ -7601,9 +7611,11 @@ change is insufficient. Return JSON only."""
             previous_environment_semantics or {})
         current_semantics = self._strip_privileged_semantics(
             current_environment_semantics or {})
-        previous_sheet = self._completion_contact_sheet(previous_views)
-        current_sheet = self._completion_contact_sheet(current_views)
-        keyframe_sheet = self._contact_sheet(edge_keyframes)
+        panorama_sheet = (self._completion_contact_sheet
+                          if len(previous_views) == 8 else self._contact_sheet)
+        previous_sheet = panorama_sheet(previous_views)
+        current_sheet = panorama_sheet(current_views)
+        keyframe_sheet = self._keyframe_storyboard(edge_keyframes)
         prompt = f"""You are the RGB-only edge completion judge for an R2R robot.
 
 Decide whether the REAL observed transition from the previous node, through
