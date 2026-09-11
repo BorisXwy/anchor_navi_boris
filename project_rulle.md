@@ -84,6 +84,9 @@ Habitat 原始句柄只归测试适配器所有：用于 episode 起点初始化
    - `path_index == 0` 使用 episode 的 `start_rotation`；
    - `path_index > 0` 使用 `reference_path[path_index-1] -> reference_path[path_index]` 的方向作为 yaw；
    - 必须在 manifest 中标记该 yaw 是由轨迹位置推导，而不是数据集原生旋转。
+   - 这里的 `start_rotation` 指 manifest 里 `dataset_path` 所声明的那个数据集文件中的值。
+     OpenNav100 端到端评测默认使用第 17 节定义的起始朝向对齐数据集，其 `start_rotation`
+     是按第 17 节的 form 级规则离线构建的；运行时仍然只读该文件，不得在线再改。
 5. 全模块单点测试优先选择内部状态 `1 <= path_index < len(reference_path)-1`，从而同时存在真实来向和真实下一段方向。若只能使用起点，必须明确标记 `initial_state_only`。
 6. 状态选择必须在运行模型前由固定 seed 和确定性采样规则完成。禁止根据 VLM 输出或运行结果事后换状态。
 
@@ -1044,3 +1047,53 @@ STOP pose 的最终 geodesic distance 位于 episode goal radius 内。9/10、�
 通用 failure taxonomy，再只修改该子轮负责的模块；已通过前缀必须回归且不得退化。
 可以记录阶段性 simulator success 数量，但只有最终同配置的完整起点运行达到10/10
 才算本次优化任务完成。
+
+## 17. OpenNav100 起始朝向对齐数据集（2026-09-11 起生效）
+
+### 17.1 问题
+
+官方 R2R VLN-CE `val_unseen.json.gz` 的 `start_rotation` 与指令开局转向词、GT
+`reference_path` 的初始方向并不统一。对 100 条 OpenNav id 的量化（左为正，
+Δ = GT 初始方向 − 官方 yaw）：`TURN_LEFT` 6 条 Δ 在 +43°~+149°、`TURN_RIGHT`
+10 条中 7 条在 −60°~−166° 但 3 条在 +106°~+116°、`TURN_AROUND` 6 条 |Δ| 在
+81°~180°；更多的是非转向开局却背对路径（如 1133 "Walk straight…" Δ=−179°、
+842 "Go straight…" Δ=−94°、207 "Walk out of the room…" Δ=−179°）。这种起点
+朝向让"按指令开局"的选点在开局就没有可用地面候选，与模型能力无关。
+
+### 17.2 对齐数据集的构建规则（form 级，不允许逐条手改）
+
+- 文件：`data/datasets/opennav100_start_aligned/val_unseen_opennav100ids_start_aligned.json.gz`，
+  由 `scripts/build_opennav100_start_aligned_dataset.py` 从官方 `val_unseen.json.gz`
+  按 `data/opennav100_episode_ids.json` 的 100 个 id（保持清单顺序）生成；除
+  `start_rotation` 外**所有字段逐字节等于官方值**，`instruction_vocab` 原样保留。
+- 开局 form 由确定性分类 `instruction_taxonomy.decompose_by_definition(text)[0]["form"]`
+  给出，不使用 VLM。
+- GT 初始方向 = 起点到 `reference_path` 上第一个沿折线累计距离 ≥ 1.0 m 的 waypoint 的
+  方位角（整条路径不足 1.0 m 时取末点）；仅用 x/z 分量。
+- 转向角：`TURN_LEFT = +90°`、`TURN_RIGHT = −90°`、`TURN_AROUND = 180°`，其余非转向
+  form 一律 0°；对齐后的 `start_yaw = GT 初始方向 − 转向角`，即执行完开局转向后正对
+  GT 初始方向。
+- `TURN_TO_LANDMARK` 与 `OTHER` 无法定义转向角，**保留官方 `start_rotation`**，审计标
+  `kept_official`。当前 100 条为 rewritten 96 / kept_official 4。
+- 四元数 `[x, y, z, w]` 只绕 +y，`yaw = 2·atan2(y, w)`，与
+  `habitat_point_navigation.yaw_from_coeffs` 一致（已交叉验证）。
+- 构建产物必须一并提交：`build_manifest.json`（源文件与输出 sha256、规则参数、逐 form
+  计数）和 `start_rotation_alignment_audit.jsonl/.md`（逐条审计表）。
+  `tests/test_opennav100_aligned_dataset.py` 校验提交产物与规则的一致性；改规则必须重建
+  文件、更新本节并升级 `rule_version`，不得只改数据。
+
+### 17.3 使用与报告
+
+- `run_e2e_eval.sh` / `scripts/run_end_to_end_eval.py` 新增 `--start-pose-source
+  {aligned,official}`，**默认 `aligned`**；`official` 使用官方全量 `val_unseen.json.gz`；
+  显式 `--r2r-data` 优先于两者并记录为 `explicit`。
+- `--episode-indices` 指官方全量 split 的行号，与 `aligned` 同用时 preflight 直接拒绝；
+  固定十 EP（`0, 3, 6, 9, 18, 27, 45, 126, 204, 219`）协议不受本节影响，仍在官方全量
+  数据上按 index 运行（`--start-pose-source official`）。
+- 每轮 `manifest.json` 必须记录 `start_pose_source` 与 `dataset_sha256`；报告 OpenNav100
+  结果时必须标注使用的是 `aligned` 还是 `official`，两者不得混在同一张成功率表里比较。
+- 对齐后的 `start_rotation` 只用于 episode 初始化；第 0 节和第 4 节的 RGB-only 与
+  示范信息泄漏约束不变——在线模块仍不得读取任何 pose / reference_path。
+- 已知局限：regex 分类会把 "Take a right at the large clock and travel straight"（id 52）
+  这类"先走到地标再转"的句子判为开局 `TURN_RIGHT`；这是 form 级规则的代价，按 16.4
+  不做逐条覆盖，必要时只能通过改进通用分类规则并重建数据集解决。
