@@ -272,19 +272,27 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
             sub_instruction = self.state.active_sub_instruction
             stage = sub_instruction.to_stage_dict()
             back_heading = wrap_angle(heading + math.pi) if has_incoming_edge else None
-            selection = self.point_selector.select(PointSelectionRequest(
-                sim=self.sim, position=None, yaw=heading, stage=stage,
-                target_index=hop_index, rendered=self.rendered,
-                motion_log=self.motion_log,
-                position_history=[],
-                previous_action_history=previous_action_history,
-                back_yaw=back_heading,
-                blocked_yaws=self.state.blocked_yaws(),
-                reference_path=None, reference_path_index=0,
-                minimum_progress_distance_m=0.0,
-                maximum_initial_geodesic_m=None,
-                semantic_reference_rgb=None,
-                policy_input_contract="rgb_only_v1"))
+            try:
+                selection = self.point_selector.select(PointSelectionRequest(
+                    sim=self.sim, position=None, yaw=heading, stage=stage,
+                    target_index=hop_index, rendered=self.rendered,
+                    motion_log=self.motion_log,
+                    position_history=[],
+                    previous_action_history=previous_action_history,
+                    back_yaw=back_heading,
+                    blocked_yaws=self.state.blocked_yaws(),
+                    reference_path=None, reference_path_index=0,
+                    minimum_progress_distance_m=0.0,
+                    maximum_initial_geodesic_m=None,
+                    semantic_reference_rgb=None,
+                    policy_input_contract="rgb_only_v1"))
+            except RuntimeError as exc:
+                # Same end_reason prefix as the legacy strategy: the evaluator
+                # categorises it (no_floor_bearing_candidate, ...) and still
+                # detects provider-exhaustion text inside it. Fatal provider
+                # errors are not RuntimeError and keep propagating.
+                end_reason = f"vlm_selection_failed: {exc}"
+                break
             chosen = selection.chosen
             if chosen is None:
                 end_reason = "rgb_vlm_selection_returned_no_ground_point"
