@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from PIL import Image
 
 from instruction_completion_judge import (
     RGBOnlyNodeTransitionInstructionCompletionJudge,
@@ -27,10 +28,13 @@ from point_navigation_executor import (
     PointNavigationRequest, execute_point_navigation,
 )
 from point_selectors import (
-    PointSelectionRequest, continuous_turn, observe_eight_rgb,
+    PointSelectionRequest, continuous_turn, observe, observe_eight_rgb,
     observe_six_rgb, select_ground_point, targetable_ground_mask, wrap_angle,
 )
 from rgb_only_runtime import require_rgb_only_policy_sim
+
+TURN_TO_SELECTED_TARGET_PHASE = "turn_to_selected_target"
+TURN_START_KEYFRAME_PHASE = "turn_start"
 
 
 def _cosine(left, right):
@@ -38,6 +42,65 @@ def _cosine(left, right):
     right = np.asarray(right, np.float32)
     denominator = float(np.linalg.norm(left) * np.linalg.norm(right))
     return float(np.dot(left, right) / denominator) if denominator > 1e-8 else 0.0
+
+
+def turn_to_selected_target_actions(motion_log, start_index, hop_index):
+    """Edge action records for the in-place turn the point selector executed.
+
+    ``continuous_turn`` logs the discrete ``turn_left``/``turn_right`` commands
+    it issues only to ``motion_log``; the executor's action history starts
+    after the turn.  Reconstruct those commands as RGB-only action records so
+    the completion judge sees the same turn the simulator received.  Eight-view
+    refinement probes turn out and straight back, so they are not part of the
+    executed edge and are skipped.  Steps are negative so they sort before the
+    executor's own ``0..N`` steps.
+    """
+    entries = [
+        entry for entry in list(motion_log)[start_index:]
+        if entry.get("phase") == TURN_TO_SELECTED_TARGET_PHASE
+        and int(entry.get("target_index", -1)) == int(hop_index)
+        and entry.get("action") in {"turn_left", "turn_right"}
+    ]
+    count = len(entries)
+    return [{
+        "step": index - count,
+        "action": str(entry["action"]),
+        "commanded_turn_deg": float(entry.get("commanded_turn_deg", 0.0)),
+        "forward_commanded": False,
+        "orientation_only": True,
+        "phase": TURN_TO_SELECTED_TARGET_PHASE,
+        "policy_input_contract": "rgb_only_v1",
+    } for index, entry in enumerate(entries)]
+
+
+def prepend_turn_start_keyframe(output_dir, hop_index, turn_start_rgb,
+                                turn_step_count, keyframe_records):
+    """Persist the pre-turn forward frame as keyframe 0 of this edge.
+
+    The executor numbers and saves its own keyframes before this frame is
+    known, so its records are shifted by one while their image paths stay.
+    """
+    output_dir = Path(output_dir)
+    keyframes_dir = output_dir / "edge_keyframes"
+    keyframes_dir.mkdir(parents=True, exist_ok=True)
+    path = keyframes_dir / f"target_{int(hop_index):02d}_turn_start.jpg"
+    Image.fromarray(np.asarray(turn_start_rgb, np.uint8)[..., :3]).save(
+        path, quality=92)
+    turn_start_record = {
+        "step": -(int(turn_step_count) + 1),
+        "phase": TURN_START_KEYFRAME_PHASE,
+        "action": None,
+        "policy_input_contract": "rgb_only_v1",
+        "keyframe_index": 0,
+        "source_frame_index": -1,
+        "image_path": str(path.relative_to(output_dir)),
+    }
+    shifted = []
+    for record in keyframe_records:
+        item = dict(record)
+        item["keyframe_index"] = int(item.get("keyframe_index", 0)) + 1
+        shifted.append(item)
+    return [turn_start_record] + shifted
 
 
 @dataclass
@@ -272,6 +335,11 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
             sub_instruction = self.state.active_sub_instruction
             stage = sub_instruction.to_stage_dict()
             back_heading = wrap_angle(heading + math.pi) if has_incoming_edge else None
+            # The selector turns the agent toward the chosen view before
+            # returning; remember where its commands start in motion_log and
+            # what the agent saw before turning so the edge can include them.
+            motion_log_start = len(self.motion_log)
+            turn_start_rgb = observe(self.sim)
             try:
                 selection = self.point_selector.select(PointSelectionRequest(
                     sim=self.sim, position=None, yaw=heading, stage=stage,
@@ -299,6 +367,8 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
                 break
             selected_heading = float(chosen["yaw"])
             selected_headings.append(selected_heading)
+            turn_actions = turn_to_selected_target_actions(
+                self.motion_log, motion_log_start, hop_index)
             self.sim.emit_evaluation_event("point_selected", {
                 "target_index": hop_index,
                 "selected_point_xy": np.asarray(chosen["point"]).tolist(),
@@ -322,7 +392,17 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
                     policy_input_contract="rgb_only_v1"))
             heading = navigation.final_yaw
             global_step = navigation.next_global_step
-            action_history = navigation.action_history
+            # One merged list for the hop record, the graph edge and the next
+            # selection: the post-run edge integrity check compares them.
+            action_history = turn_actions + list(navigation.action_history)
+            edge_keyframes = list(navigation.edge_keyframes)
+            edge_keyframe_records = list(
+                navigation.record.get("edge_keyframes", []))
+            if turn_actions:
+                edge_keyframes.insert(0, turn_start_rgb)
+                edge_keyframe_records = prepend_turn_start_keyframe(
+                    self.output_dir, hop_index, turn_start_rgb,
+                    len(turn_actions), edge_keyframe_records)
             record: dict[str, Any] = {
                 "target_index": hop_index,
                 "strategy": self.mode,
@@ -384,13 +464,12 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
                 edge_metadata={
                     "selected_action_heading_rad": selected_heading,
                     "point_selection_review": chosen.get("vlm_selection", {}),
-                    "edge_keyframes": navigation.record.get(
-                        "edge_keyframes", []),
+                    "edge_keyframes": edge_keyframe_records,
                     "policy_input_contract": "rgb_only_v1",
                 })
             completion = self.completion_judge.judge(
                 stop_node, self.state.expected_sub_instruction_id,
-                completion_views, navigation.edge_keyframes).to_dict()
+                completion_views, edge_keyframes).to_dict()
             classification = {
                 "node_id": stop_node.node_id,
                 "belongs_to_sequence": bool(

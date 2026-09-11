@@ -27,7 +27,7 @@ class RGBOnlyEdgeJudgeTest(unittest.TestCase):
     def views(count, shade):
         return [np.full((48, 64, 3), shade, np.uint8) for _ in range(count)]
 
-    def judge(self, keyframe_count, views=8):
+    def judge(self, keyframe_count, views=8, edge_action_history=None):
         backend = RecordingHeuristicBackend()
         harness = NavigationVLMHarness(backend, retries=0)
         sub_instruction = SubInstruction.from_mapping({
@@ -40,9 +40,36 @@ class RGBOnlyEdgeJudgeTest(unittest.TestCase):
             previous_node_id="node_0000", current_node_id="node_0001",
             previous_views=self.views(views, 40),
             current_views=self.views(views, 90),
-            edge_action_history=[{"action": "move_forward", "step": 0}],
+            edge_action_history=(
+                edge_action_history if edge_action_history is not None
+                else [{"action": "move_forward", "step": 0}]),
             edge_keyframes=self.views(keyframe_count, 120))
         return backend, result
+
+    def test_turn_to_view_actions_are_counted_and_kept_in_prompt(self):
+        turn_actions = [{
+            "step": index - 6, "action": "turn_right",
+            "commanded_turn_deg": -15.0, "forward_commanded": False,
+            "orientation_only": True, "phase": "turn_to_selected_target",
+            "policy_input_contract": "rgb_only_v1",
+        } for index in range(6)]
+        forward_actions = [{
+            "step": step, "action": "move_forward", "commanded_turn_deg": 0.0,
+            "forward_commanded": True, "rgb_motion_score": 12.0,
+            "rgb_motion_threshold": 2.0, "policy_input_contract": "rgb_only_v1",
+        } for step in range(2)]
+        backend, _ = self.judge(
+            6, edge_action_history=turn_actions + forward_actions)
+        prompt = backend.calls[-1]["prompt"]
+        self.assertIn('"right_turn_command_count": 6', prompt)
+        self.assertIn('"left_turn_command_count": 0', prompt)
+        self.assertIn('"forward_command_count": 2', prompt)
+        self.assertIn('"control_steps": 8', prompt)
+        self.assertIn('"phase": "turn_to_selected_target"', prompt)
+        self.assertIn('"orientation_only": true', prompt)
+        self.assertNotIn("policy_input_contract", prompt.split(
+            "RGB-only commanded action history:")[1].split(
+            "RGB detector evidence")[0])
 
     def test_executor_default_five_keyframes_do_not_crash(self):
         for keyframe_count in (1, 5, 6, 7):
