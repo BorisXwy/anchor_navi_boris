@@ -1358,6 +1358,35 @@ Case D 的实测结果直接证明了「按 `active_form` 分级预算」这段�
 - **on_route 分级预算（4/3 次）是死代码**——见 7.1.3 结尾与 7.1.4 Case D：逻辑本身跑起来是对的，但 RGB-only 的 `classification["unknown_disposition"]` 硬编码为 `None`，触发条件永远不满足。如果未来要真的启用这条分级预算，需要在 `rgb_only_instruction_sequence.py` 里补一个 RGB-only 版本的「on_route 判定」（例如用几何/语义相似度判断"没走到但确实还在路上"），而不是照抄旧版 `infer_unknown_disposition()`（它依赖旧版判定的 `endpoint_evidence`/`temporal_evidence`/`motion_evidence` 等字段，RGB-only 的简化判定压根不产出这些）。
 - **行号漂移**：272c223 和 2a3dbd9 两次修复往 `rgb_only_instruction_sequence.py` 前部插入了约 63 行新代码（`turn_to_selected_target_actions`、`prepend_turn_start_keyframe`、`try/except RuntimeError` 及相关 import），导致 `run()` 从原文记录的第 255 行漂移到第 318 行，`RGBOnlyGraphBacktracker.recover()` 从第 101 行漂移到第 164 行；`instruction_sequence_exploration.py` 因两次提交均未触碰，`InstructionSequenceStateMachine.observe()` 仍稳定在第 920 行。
 
+### 7.1.8 新增默认回溯：动作历史逆向回放（`--backtrack-method action-reversal`，2026-09-11）
+
+> 本节写于 2026-09-11。7.1.3 描述的「VLM 指方向 + 点导航 + 指纹相似度 ≥ 0.75」回溯保留为 `--backtrack-method visual`，**不再是默认**；默认改为本节的 `action-reversal`。两者只在 `RGBOnlyInstructionSequenceExplorationStrategy` 内部切换，其余模块不感知。
+
+**一句话**：一跳是怎么走出去的，就原样倒着走回来。一跳的完整命令序列 `H`（选点器转向 `turn_to_selected_target_actions` + 执行器每步动作）是自己发出去的、完全已知的，所以「回到出发节点」不需要再当成一个新的导航问题去解，而是一个固定动作串：
+
+1. 原地 `turn_left` × (180 / turn_step)，默认 15° → 12 次；
+2. 按 `reversed(H)` 逐条回放，`turn_left`↔`turn_right` 互换，`move_forward` 不变；
+3. 再 `turn_left` × 12，把动作坐标系的朝向精确还原到这一跳出发时的朝向 h0。
+
+例：`F,F,R,F,L,F` → `12×L, F, R, F, L, F, F, 12×L`。朝向记账只累加 `commanded_turn_deg`（h0+Δ → +π → −Δ → +π ≡ h0），全程不读仿真器姿态；纯逻辑在 `plan_action_reversal(action_history, turn_step_deg)`，执行在 `RGBOnlyActionReversalBacktracker.recover()`（`scripts/rgb_only_instruction_sequence.py`，紧跟 `RGBOnlyGraphBacktracker` 之后）。CLI 层会拒绝 180 不是 `--turn-step-deg` 整数倍的配置。
+
+**门槛只看 VLM**：回放完拍六视图，调用新的 `NavigationVLMHarness.judge_node_revisit_rgb_only()`（prompt 标签 `RGB_ONLY_NODE_REVISIT_CONFIRMATION`，版本 `v1_two_panorama_same_place`）——上排是目标节点存的六视图、下排是当前六视图、视角一一对应，让 VLM 回答 `same_place`。`CompactVisualEmbedder` 余弦相似度仍然算并记进 `attempts[0].target_panorama_similarity_after`，但**不参与判定**（5.1.3 实测过它对灰图/噪声图都能给 0.97，不可靠）。VLM 说不是同一地点 → 回溯失败，episode 直接以既有的 `rgb_only_physical_failure_recovery_failed` / `rgb_only_sequence_recovery_failed` 结束，**不回退到 visual 方法**。
+
+**两处调用点的差异**（`run()` 里通过 `self._recover(..., create_revisit_node=...)` 分派）：
+
+| 触发 | 回溯目标 | 回放的历史 | 成功后 | `end_reason` |
+|---|---|---|---|---|
+| ① 点导航没 arrive（`if not navigation.arrived`） | **这一跳的出发节点** `graph_memory.nodes[-1]`（visual 方法用的是 `state.last_verified_node_id`，两者在 explore_once_more 之后会不同） | 刚失败那一跳的 `action_history` | 不建节点、不建边（失败的尝试永远不进记忆图）；`block_failed_physical_direction(selected_heading)`；`previous_action_history`/`has_incoming_edge` 恢复成这一跳开始前的值；代码断言朝向 == h0 | `action_reversal_return_confirmed` |
+| ② 判定连续 unknown → `backtrack_and_block` | `directive.backtrack_target_node_id`（= B），代码断言它就是当前节点 C 的 `predecessor` | 刚写进 B→C 边的那份 `action_history` | 新建回访节点 B′（`edge_kind="rgb_only_action_reversal_backtrack"`，`arrival_signal="action_reversal_node_revisit_confirmed"`）+ `add_loop_closure_edge(B, B′)`（`verification="vlm_node_revisit_confirmation"`），然后 `state.on_backtrack(True, current_node_id=B′)` 照旧 | `action_reversal_return_confirmed_node_recorded` |
+
+其它 `end_reason`：`action_reversal_return_rejected_by_vlm`、`action_reversal_vlm_error`（harness 重试耗尽；`VLMProviderFatalError` 仍向上抛）。这些只出现在 `recovery_records[*].end_reason` / `attempts[0]` 里，策略顶层 `end_reason` 不变，`termination_category` 无需改。每条 recovery 记录新增 `backtrack_method` 与 `trigger`（`physical_failure` / `backtrack_and_block`）。
+
+**事后审计**：回放前后各发一次 `emit_evaluation_event`（`action_reversal_backtrack_started` / `_finished`，带 `same_place`、`confidence`、`similarity`），考官在 `evaluation_only/evaluation_geometry.json` 的 `point_events` 里能看到隐藏坐标，可直接量「真的回到了几厘米以内」——这条通道是写入型的，策略读不到。录像里逆向回放帧的 phase 为 `action_reversal_turn_around` / `action_reversal_replay` / `action_reversal_restore_heading`。
+
+**✅ 实测**（2026-09-11，`--vlm-backend heuristic`、EP index 0、`--max-steps-per-target 12`、`outputs/action_reversal_smoke`）：第一跳 12 步用完没 arrive，隐藏坐标从 (15.069, −4.485) 走到 (12.865, −4.411)；逆向回放 36 个动作后回到 (15.065, −4.411)，XZ 误差 ≈ 0.07 m，朝向 1.047 rad 与出发时完全一致；图里没有为失败跳建节点，出发方向被拉黑，第二跳换方向后正常到达；`rgb_only_contract_audit.json` `passed=true`。启发式后端固定回答 `same_place=true`，因此这次只验证了机械回放与数据流，**VLM 判定质量尚未验证**。单元/契约测试 `tests/test_rgb_only_action_reversal_backtrack.py`（12 个）与全量 375 个测试全部通过。
+
+**规则衔接**：`project_rulle.md` §5.7 / §7.7 现行措辞要求回溯成功同时满足「0.75 m 平面距离 + 六视图相似度 ≥ 0.75」；`action-reversal` 的成功门只有 VLM 判定，相似度与隐藏距离只记录不判定。按 §16 规则只能在实验前改口径，本次未改 `project_rulle.md`，需要在真实 VLM 十 EP 实验前由规则维护者补一句「`--backtrack-method action-reversal` 的回溯成功门为 VLM `same_place` 判定；余弦相似度与隐藏几何距离仍必须记录并在事后审计中报告」。
+
 ---
 
 # 模块 8：STOP 与打分（考官）
@@ -1537,7 +1566,7 @@ HeuristicBackend 这一半也同理：它靠 prompt 里的标记 `EDGE_INSTRUCTI
 Round 021 日志：「冻结端点距离 guard 覆盖全部图像到达 proposal（包括导航点仍可见和零步 near-field）」。对应 `point_navigation_executor.py` 旧契约分支：`request.selected_point_navmesh_xyz`（第 794、1646、1861 行）+ `self.sim.pathfinder.find_path(endpoint_path)`（第 1657 行）——每一步都用**真实位置到目标点的测地距离**来否决或确认"到达"；走路也是 `pathfinder.try_step`（第 1933 行），连续转角 + 直接判碰撞。「物理到达混淆矩阵 TP=55、FP=0、FN=0」的 100% 准确率就是这样来的：有了测地距离当裁判，画面点簇消失只是提案，最终由几何拍板。新契约的 `rgb_only_dense_stop_v1`（第 482 行）只有"45 个点 ≥50% 消失连续 3 帧 + 至少前进 3 步 + 画面变化"，没有这个裁判。
 
 **3. 回溯用坐标（模块 7）**
-`node_backtracking.py` 的 `BACKTRACK_PLANNER_PROFILES`：`breadcrumb_endpoint_v4/v5` 用 `navmesh_first_route_waypoint`（第 36 行）取导航网格最短路的第一个航点当方向，近距离时直接把**存储的节点坐标**交给执行器；`NodeRevisitMatcher` 要求平面距离 ≤0.75 m **且**视觉相似度 ≥0.75（第 485 行）。新契约的 `RGBOnlyGraphBacktracker`（`rgb_only_instruction_sequence.py:101`）只剩视觉相似度一条，靠 VLM 指方向。
+`node_backtracking.py` 的 `BACKTRACK_PLANNER_PROFILES`：`breadcrumb_endpoint_v4/v5` 用 `navmesh_first_route_waypoint`（第 36 行）取导航网格最短路的第一个航点当方向，近距离时直接把**存储的节点坐标**交给执行器；`NodeRevisitMatcher` 要求平面距离 ≤0.75 m **且**视觉相似度 ≥0.75（第 485 行）。新契约的 `RGBOnlyGraphBacktracker`（`rgb_only_instruction_sequence.py:101`）只剩视觉相似度一条，靠 VLM 指方向。（2026-09-11 起默认改为 `--backtrack-method action-reversal`：不再重新导航，而是把这一跳的命令串倒着回放、由 VLM 确认是否回到原节点，见 7.1.8。）
 
 **4. 判定用姿态（模块 6）**
 旧判定输入含 `previous_base_yaw_rad / current_base_yaw_rad / position_xyz`，`instruction_completion_evidence.summarize_visual_transition` 用真实朝向差算 `endpoint_heading_delta_deg`；`instruction_completion_judge.py:315-352` 的"反向车道否决"用 `cosine_with_source_incoming_lane < -0.20`，也是几何量。Round 021 的「八视图朝向校正」（V28）、「两参照物左右夹持」等闸门都挂在这条旧路径上。

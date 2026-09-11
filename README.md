@@ -350,6 +350,22 @@ decision to explore or backtrack after `unknown` is not an output or accuracy
 claim of the completion module. Successful backtracking still writes a visual
 loop-closure edge.
 
+Physical backtracking inside that strategy is selected with
+`--backtrack-method {action-reversal,visual}` (default `action-reversal`):
+
+- `action-reversal` turns 180 degrees, replays the hop's own commanded action
+  history backwards with `turn_left`/`turn_right` swapped, turns 180 degrees
+  again so the action-frame heading is restored, then asks the VLM
+  (`judge_node_revisit_rgb_only`, two six-view contact sheets) whether the
+  stored node is re-observed. The VLM verdict is the only gate; panorama
+  embedding similarity is recorded but not used. A rejected return ends the
+  episode. It requires `180 / --turn-step-deg` to be an integer.
+- `visual` is the older `RGBOnlyGraphBacktracker`: VLM-picked return ray,
+  point navigation, and an embedding-similarity threshold.
+
+`evaluate_point_navigation.py`, `run_e2e_eval.sh` and
+`evaluate_r2r_all_modules.py` forward the same flag.
+
 ## End-to-end evaluation launcher
 
 `run_e2e_eval.sh` (thin wrapper over `scripts/run_end_to_end_eval.py`) mirrors
