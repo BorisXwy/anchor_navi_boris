@@ -10,6 +10,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -325,6 +326,96 @@ class OrchestratorTest(EndToEndRunnerFixture):
         summary = json.loads((round_dir / "summary.json").read_text())
         self.assertEqual(summary["episode_count"], 0)
         self.assertEqual(summary["not_run_episode_indices"], [0, 1])
+
+
+class StartPoseSourceTest(EndToEndRunnerFixture):
+    """--start-pose-source picks the dataset; explicit --r2r-data wins."""
+
+    def setUp(self):
+        super().setUp()
+        self.aligned = self.root / "aligned" / "val_unseen_opennav100ids_start_aligned.json.gz"
+        self.aligned.parent.mkdir()
+        self.aligned.write_bytes(self.dataset.read_bytes())
+        self.official = self.root / "official_val_unseen.json.gz"
+        self.official.write_bytes(self.dataset.read_bytes())
+        patches = [
+            mock.patch.object(runner, "ALIGNED_OPENNAV100_DATA", self.aligned),
+            mock.patch.object(runner, "DEFAULT_R2R_DATA", self.official),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def argv_without_dataset(self, *extra):
+        argv = self.base_argv(*extra)
+        position = argv.index("--r2r-data")
+        return argv[:position] + argv[position + 2:]
+
+    @staticmethod
+    def run_main(argv):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return runner.main(argv)
+
+    def manifest(self):
+        (round_dir,) = sorted(path for path in self.output_root.glob("*")
+                              if path.is_dir())
+        return json.loads((round_dir / "manifest.json").read_text())
+
+    def test_resolution_order(self):
+        self.assertEqual(runner.resolve_dataset_path(None, "aligned"),
+                         (self.aligned, "aligned"))
+        self.assertEqual(runner.resolve_dataset_path(None, "official"),
+                         (self.official, "official"))
+        self.assertEqual(runner.resolve_dataset_path(self.dataset, "aligned"),
+                         (self.dataset, "explicit"))
+        with self.assertRaises(runner.PreflightError):
+            runner.resolve_dataset_path(None, "bogus")
+
+    def test_default_is_aligned_and_recorded_in_manifest(self):
+        self.assertEqual(self.run_main(self.argv_without_dataset("7")), 0)
+        manifest = self.manifest()
+        self.assertEqual(manifest["start_pose_source"], "aligned")
+        self.assertEqual(manifest["dataset_path"], str(self.aligned.resolve()))
+        self.assertIn("aligned", manifest["benchmark"])
+
+    def test_official_switch_uses_published_split(self):
+        self.assertEqual(self.run_main(self.argv_without_dataset(
+            "7", "--start-pose-source", "official")), 0)
+        manifest = self.manifest()
+        self.assertEqual(manifest["start_pose_source"], "official")
+        self.assertEqual(manifest["dataset_path"], str(self.official.resolve()))
+
+    def test_explicit_dataset_overrides_switch(self):
+        self.assertEqual(self.run_main(self.base_argv(
+            "7", "--start-pose-source", "aligned")), 0)
+        manifest = self.manifest()
+        self.assertEqual(manifest["start_pose_source"], "explicit")
+        self.assertEqual(manifest["dataset_path"], str(self.dataset.resolve()))
+
+    def test_indices_are_refused_on_the_aligned_subset(self):
+        self.assertEqual(self.run_main(self.argv_without_dataset(
+            "--dry-run", "--episode-indices", "0")), 2)
+        self.assertEqual(self.run_main(self.argv_without_dataset(
+            "--dry-run", "--episode-indices", "0",
+            "--start-pose-source", "official")), 0)
+
+    def test_missing_aligned_file_fails_preflight(self):
+        self.aligned.unlink()
+        self.assertEqual(self.run_main(self.argv_without_dataset("--dry-run", "7")), 2)
+        self.assertEqual(self.run_main(self.argv_without_dataset(
+            "--dry-run", "7", "--start-pose-source", "official")), 0)
+
+    def test_resume_keeps_the_recorded_source(self):
+        self.assertEqual(self.run_main(self.argv_without_dataset(
+            "7", "--start-pose-source", "official")), 0)
+        manifest = self.manifest()
+        (round_dir,) = sorted(path for path in self.output_root.glob("*")
+                              if path.is_dir())
+        self.assertEqual(self.run_main(self.argv_without_dataset(
+            "--resume", str(round_dir))), 0)
+        resumed = self.manifest()
+        self.assertEqual(resumed["start_pose_source"], "official")
+        self.assertEqual(resumed["dataset_path"], manifest["dataset_path"])
 
 
 if __name__ == "__main__":

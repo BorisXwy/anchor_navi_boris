@@ -4,11 +4,17 @@
 #
 #   bash run_e2e_eval.sh 7                       # one OpenNav episode id
 #   bash run_e2e_eval.sh 7,11,13 --workers 2     # explicit ids, 2 parallel shards
-#   bash run_e2e_eval.sh --all --workers 2       # all 100 OpenNav ids (official val_unseen poses)
-#   bash run_e2e_eval.sh --episode-indices 0,3,6,9,18,27,45,126,204,219
+#   bash run_e2e_eval.sh --all --workers 2       # all 100 OpenNav ids
+#   bash run_e2e_eval.sh 7 --start-pose-source official   # published start_rotation
+#   bash run_e2e_eval.sh --start-pose-source official --episode-indices 0,3,6,9,18,27,45,126,204,219
 #   bash run_e2e_eval.sh --dry-run 7             # preflight only, no GPU/Habitat
 #   bash run_e2e_eval.sh --list                  # print the 100 ids
 #   bash run_e2e_eval.sh --resume outputs/e2e_eval/<round_dir>
+#
+# Dataset: --start-pose-source aligned (default) uses the 100-episode subset with
+# start_rotation aligned to the opening turn + GT path
+# (data/datasets/opennav100_start_aligned, docs/opennav100_start_rotation_alignment_zh.md);
+# --start-pose-source official uses the full R2R val_unseen.json.gz as published.
 #
 # Unknown options are forwarded to scripts/evaluate_point_navigation.py
 # (e.g. --views 6 --vlm-timeout 240).  Smoke without VLM cost:

@@ -2,9 +2,13 @@
 """Shard, launch and merge end-to-end R2R episode evaluations.
 
 Usage mirrors ``run_final_method_eval.sh`` from VLN-CE-master: a single
-episode id, a comma-separated id list, ``--all`` (the OpenNav100 episode ids
-replayed on the official ``val_unseen.json.gz``), ``--workers N`` parallel
-shards and ``--dry-run`` preflight.  Every shard is one sequential
+episode id, a comma-separated id list, ``--all`` (the OpenNav100 episode ids),
+``--workers N`` parallel shards and ``--dry-run`` preflight.  The dataset is
+chosen by ``--start-pose-source``: ``aligned`` (default) is the 100-episode
+subset whose ``start_rotation`` is aligned to the instruction's opening turn and
+the GT path (``data/datasets/opennav100_start_aligned``, see
+``docs/opennav100_start_rotation_alignment_zh.md``); ``official`` is the full
+R2R ``val_unseen.json.gz`` as published.  Every shard is one sequential
 ``evaluate_point_navigation.py`` process, so navigation, scoring and the
 RGB-only contract audit stay exactly as they are; this script only adds the
 orchestration layer and the round-level ``manifest.json`` / ``process.log`` /
@@ -32,6 +36,18 @@ DEFAULT_MP3D_ROOT = ROOT.parent / "3d_wm_vln/StreamVLN/data/scene_datasets/mp3d"
 DEFAULT_SHARD_RUNNER = ROOT / "scripts/evaluate_point_navigation.py"
 DEFAULT_OUTPUT_ROOT = ROOT / "outputs/e2e_eval"
 OPENNAV100_IDS_FILE = ROOT / "data/opennav100_episode_ids.json"
+ALIGNED_OPENNAV100_DATA = (
+    ROOT / "data/datasets/opennav100_start_aligned/"
+    "val_unseen_opennav100ids_start_aligned.json.gz")
+START_POSE_SOURCES = ("aligned", "official")
+BENCHMARK_BY_START_POSE_SOURCE = {
+    "aligned": "OpenNav_R2R-CE_100 episode ids on official R2R VLN-CE "
+               "val_unseen with start_rotation aligned to the opening turn + "
+               "GT path (data/datasets/opennav100_start_aligned)",
+    "official": "OpenNav_R2R-CE_100 episode ids replayed on official "
+                "R2R VLN-CE val_unseen (OpenNav start_rotation not used)",
+    "explicit": "explicit --r2r-data file (see dataset_path)",
+}
 FORBIDDEN_DATASET_MARKER = "OpenNav_R2R-CE_100_bertidx"
 MANIFEST_SCHEMA_VERSION = "e2e_round_manifest_v1"
 PROVIDER_INTERRUPTION_RETURNCODE = 86
@@ -111,6 +127,22 @@ def load_dataset(dataset_path):
 
 def dataset_sha256(dataset_path):
     return hashlib.sha256(Path(dataset_path).read_bytes()).hexdigest()
+
+
+def resolve_dataset_path(r2r_data, start_pose_source):
+    """Return ``(dataset_path, effective_source)``; an explicit --r2r-data wins."""
+    if r2r_data is not None:
+        return Path(r2r_data), "explicit"
+    if start_pose_source == "official":
+        return Path(DEFAULT_R2R_DATA), "official"
+    if start_pose_source != "aligned":
+        raise PreflightError(f"unknown --start-pose-source {start_pose_source!r}")
+    if not ALIGNED_OPENNAV100_DATA.exists():
+        raise PreflightError(
+            f"aligned dataset missing: {ALIGNED_OPENNAV100_DATA}; build it with "
+            "python scripts/build_opennav100_start_aligned_dataset.py or pass "
+            "--start-pose-source official")
+    return ALIGNED_OPENNAV100_DATA, "aligned"
 
 
 def episode_record(episode, index):
@@ -284,7 +316,10 @@ def build_parser():
             "  run_end_to_end_eval.py 7                    # one OpenNav episode id\n"
             "  run_end_to_end_eval.py 7,11,13 --workers 2  # explicit ids\n"
             "  run_end_to_end_eval.py --all --workers 2    # all 100 OpenNav ids\n"
-            "  run_end_to_end_eval.py --episode-indices 0,3,6,9,18,27,45,126,204,219\n"
+            "  run_end_to_end_eval.py 7 --start-pose-source official"
+            "  # official start_rotation\n"
+            "  run_end_to_end_eval.py --start-pose-source official "
+            "--episode-indices 0,3,6,9,18,27,45,126,204,219\n"
             "  run_end_to_end_eval.py --dry-run 7          # preflight only\n"
             "  run_end_to_end_eval.py --list               # print the 100 ids\n"
             "unknown options are forwarded verbatim to evaluate_point_navigation.py"))
@@ -294,8 +329,10 @@ def build_parser():
     selection.add_argument("--episode-ids", dest="episode_ids_option",
                            default=None, help="same as the positional list")
     selection.add_argument("--episode-indices", default=None,
-                           help="comma-separated dataset indices "
-                                "(the fixed ten-EP protocol uses indices)")
+                           help="comma-separated dataset indices; the fixed "
+                                "ten-EP protocol uses indices into the full "
+                                "official split, so this requires "
+                                "--start-pose-source official (or --r2r-data)")
     selection.add_argument("--all", action="store_true",
                            help="all 100 OpenNav ids from "
                                 "data/opennav100_episode_ids.json")
@@ -323,7 +360,14 @@ def build_parser():
 
     run = parser.add_argument_group("per-episode configuration "
                                     "(omitted = evaluator default)")
-    run.add_argument("--r2r-data", type=Path, default=DEFAULT_R2R_DATA)
+    run.add_argument("--start-pose-source", choices=START_POSE_SOURCES,
+                     default="aligned",
+                     help="aligned (default): the OpenNav100 subset whose "
+                          "start_rotation follows the opening turn + GT path "
+                          "(data/datasets/opennav100_start_aligned); official: "
+                          "the full R2R val_unseen split as published")
+    run.add_argument("--r2r-data", type=Path, default=None,
+                     help="explicit dataset file; overrides --start-pose-source")
     run.add_argument("--mp3d-root", type=Path, default=DEFAULT_MP3D_ROOT)
     run.add_argument("--vlm-backend", choices=["deepseek", "ollama", "heuristic"],
                      default="deepseek")
@@ -382,6 +426,11 @@ def select_episodes(args, episodes, id_to_index):
             "choose exactly one of: <ids>, --episode-ids, --episode-indices, "
             "--all")
     source = sources[0]
+    if source == "indices" and args.start_pose_source_effective == "aligned":
+        raise PreflightError(
+            "--episode-indices refers to rows of the full official split; the "
+            "aligned dataset holds only the 100 OpenNav episodes, so pass "
+            "--start-pose-source official (or episode ids)")
     if source == "all":
         selection = resolve_selection(
             episodes, id_to_index, episode_ids=load_opennav100_ids())
@@ -544,11 +593,13 @@ def launch_shards(round_dir, shards, logger, poll_interval_s):
 
 def print_config_snapshot(logger, selection, shards, devices, gpu_report,
                           vlm_report, assets, run_options, forwarded_args,
-                          round_dir, dataset_path, dataset_digest):
+                          round_dir, dataset_path, dataset_digest,
+                          start_pose_source):
     logger.log("=== configuration ===")
     logger.log(f"episodes       : {len(selection)} -> "
                f"ids={[item['episode_id'] for item in selection]}")
     logger.log(f"indices        : {[item['episode_index'] for item in selection]}")
+    logger.log(f"start pose src : {start_pose_source}")
     logger.log(f"dataset        : {dataset_path} sha256={dataset_digest[:12]}")
     logger.log(f"workers        : {len(shards)} devices={devices}")
     for shard in shards:
@@ -595,6 +646,11 @@ def orchestrate(args, forwarded_args, logger):
                                  "manifest; do not pass a selection")
         args.r2r_data = Path(resumed_manifest["dataset_path"])
         args.mp3d_root = Path(resumed_manifest["mp3d_root"])
+        start_pose_source = resumed_manifest.get("start_pose_source", "explicit")
+    else:
+        args.r2r_data, start_pose_source = resolve_dataset_path(
+            args.r2r_data, args.start_pose_source)
+    args.start_pose_source_effective = start_pose_source
 
     episodes, id_to_index = load_dataset(args.r2r_data)
     if args.list:
@@ -685,7 +741,8 @@ def orchestrate(args, forwarded_args, logger):
 
     print_config_snapshot(
         logger, selection, shards, devices, gpu_report, vlm_report, assets,
-        run_options, forwarded_args, round_dir, args.r2r_data, digest)
+        run_options, forwarded_args, round_dir, args.r2r_data, digest,
+        start_pose_source)
     if args.dry_run:
         logger.log("dry run: preflight passed; nothing launched")
         return 0
@@ -702,8 +759,8 @@ def orchestrate(args, forwarded_args, logger):
                         if resumed_manifest else None),
         "status": "running",
         "test_scope": "end_to_end_from_dataset_start",
-        "benchmark": "OpenNav_R2R-CE_100 episode ids replayed on official "
-                     "R2R VLN-CE val_unseen (OpenNav start_rotation not used)",
+        "benchmark": BENCHMARK_BY_START_POSE_SOURCE[start_pose_source],
+        "start_pose_source": start_pose_source,
         "git": git_revision(),
         "dataset_path": str(Path(args.r2r_data).resolve()),
         "dataset_sha256": digest,
