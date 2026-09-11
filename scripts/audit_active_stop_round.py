@@ -134,14 +134,27 @@ def _target_end_position(target, start):
 
 
 def audit_episode(episode_index, trajectory, dataset_episode,
-                  trajectory_path=None):
+                  trajectory_path=None, hidden_geometry=None):
+    """Score one episode against the hidden reference path.
+
+    ``hidden_geometry`` (``postrun_hidden_geometry.load_hidden_geometry``)
+    supplies per-target end/selected positions for rgb_only_v1 runs, whose
+    trajectory.json carries no pose by contract; the trajectory is never
+    mutated.
+    """
     reference_path = dataset_episode.get("reference_path") or []
     geometry = _polyline(reference_path)
     start = np.asarray(trajectory["reference_state"]["position_xyz"], np.float64)
     targets = []
     for target in trajectory.get("targets", []):
-        end = _target_end_position(target, start)
-        selected = target.get("selected_navmesh_target_xyz")
+        override = (hidden_geometry or {}).get(
+            int(target.get("target_index", len(targets))))
+        if override is not None and override.get("end_xyz") is not None:
+            end = np.asarray(override["end_xyz"], np.float64)
+            selected = override.get("selected_navmesh_xyz")
+        else:
+            end = _target_end_position(target, start)
+            selected = target.get("selected_navmesh_target_xyz")
         start_projection = _project_to_path(start, geometry)
         end_projection = _project_to_path(end, geometry)
         selected_horizon = (float(np.linalg.norm(

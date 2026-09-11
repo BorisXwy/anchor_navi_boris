@@ -19,6 +19,7 @@ import numpy as np
 from PIL import Image
 
 from audit_active_stop_round import _load_dataset, audit_episode
+from postrun_hidden_geometry import load_hidden_geometry
 from vlm_harness import DeepSeekBackend
 
 
@@ -55,18 +56,61 @@ def _completion_candidates(target):
     return values
 
 
+def _real_edge(target):
+    """Whether a target produced a genuine navigation-graph node and edge.
+
+    Legacy strategies stamp ``navigation_physical_arrival`` from privileged
+    online geometry and it stays authoritative when present.  ``rgb_only_v1``
+    strategies cannot write it by contract, so for them a policy-declared
+    arrival with a persisted node/edge is the real-edge signal and geometric
+    correctness is checked post-run by the hidden-GT gate instead.
+    """
+    if not (target.get("point_target_arrived", target.get("arrived", False))
+            and target.get("node_created_after_point_arrival")
+            and target.get("navigation_graph_node_id")
+            and target.get("navigation_graph_edge_id")):
+        return False
+    physical = target.get("navigation_physical_arrival")
+    if physical is not None:
+        return bool(physical)
+    return target.get("policy_input_contract") == "rgb_only_v1"
+
+
+def system_all_judged_edges(trajectory):
+    """Every real-edge judgment (completed or unknown), one record per target.
+
+    ``online_status``/``online_confidence`` are for output labelling only and
+    must never reach the verifier prompt.
+    """
+    records = []
+    for target in trajectory.get("targets", []):
+        if not _real_edge(target):
+            continue
+        for field in ("instruction_completion", "chained_stop_wait_completion"):
+            completion = target.get(field)
+            if not isinstance(completion, dict):
+                continue
+            if completion.get("status") not in ("completed", "unknown"):
+                continue
+            try:
+                stage_id = int(completion["expected_sub_instruction_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            records.append({
+                "target": target, "field": field, "completion": completion,
+                "stage_targets": [target], "stage_id": stage_id,
+                "online_status": completion.get("status"),
+                "online_confidence": completion.get("confidence"),
+            })
+    return records
+
+
 def system_stage_completion_candidates(trajectory):
     """Return the first ordered real-edge completion candidate per stage."""
     result = {}
     real_attempts = {}
     for target in trajectory.get("targets", []):
-        real_edge = bool(
-            target.get("point_target_arrived", target.get("arrived", False)) and
-            target.get("navigation_physical_arrival") and
-            target.get("node_created_after_point_arrival") and
-            target.get("navigation_graph_node_id") and
-            target.get("navigation_graph_edge_id"))
-        if not real_edge:
+        if not _real_edge(target):
             continue
         active = target.get("sub_instruction") or target.get(
             "instruction_stage") or {}
@@ -149,6 +193,17 @@ def _target_current_node_id(stage_target):
     return stage_target.get("navigation_graph_node_id")
 
 
+def _stage_target_edge_keyframes(stage_target, edges_by_id):
+    """rgb_only_v1 targets keep keyframes on the graph edge, not the target."""
+    records = stage_target.get("edge_keyframes")
+    if records:
+        return list(records)
+    edge = edges_by_id.get(stage_target.get("navigation_graph_edge_id"))
+    if edge is None:
+        return []
+    return list((edge.get("metadata") or {}).get("edge_keyframes") or [])
+
+
 def _evidence_images(episode_dir, trajectory, candidate):
     target = candidate["target"]
     completion = candidate["completion"]
@@ -156,6 +211,7 @@ def _evidence_images(episode_dir, trajectory, candidate):
     graph_path = Path(trajectory["navigation_graph_memory"]["graph_path"])
     graph = json.loads(graph_path.read_text())
     nodes = {item["node_id"]: item for item in graph.get("nodes", [])}
+    edges_by_id = {item["edge_id"]: item for item in graph.get("edges", [])}
     graph_root = graph_path.parent
     first_completion = stage_targets[0].get("instruction_completion") or {}
     previous = nodes.get(
@@ -172,14 +228,18 @@ def _evidence_images(episode_dir, trajectory, candidate):
     ordered_paths = list(previous_paths)
     intermediate_semantics = []
     for edge_ordinal, stage_target in enumerate(stage_targets, start=1):
-        edge_keyframe_paths = [
-            episode_dir / item["image_path"]
-            for item in stage_target.get("edge_keyframes", [])
+        edge_keyframe_records = [
+            item for item in _stage_target_edge_keyframes(
+                stage_target, edges_by_id)
             if item.get("image_path")]
+        edge_keyframe_paths = [
+            episode_dir / item["image_path"] for item in edge_keyframe_records]
         images.append(_contact_sheet(
             edge_keyframe_paths, columns=3, labels=[
                 f"EDGE {edge_ordinal} TIME {index + 1}/{len(edge_keyframe_paths)}"
-                for index in range(len(edge_keyframe_paths))]))
+                + (f" {item['phase']}" if item.get("phase") == "turn_start"
+                   else "")
+                for index, item in enumerate(edge_keyframe_records)]))
         ordered_paths.extend(edge_keyframe_paths)
         evidence_sequence.append(
             f"IMAGE {len(images)}: chronological keyframes for point edge "
@@ -237,12 +297,19 @@ def _motion_summary(target, stage_targets=None):
         end = np.asarray(positions[-1], np.float64)
         vertical_delta = float(end[1] - start[1])
         horizontal_displacement = float(np.linalg.norm((end - start)[[0, 2]]))
+    action_names = [str(item.get("action", "")) for item in actions]
     return {
         "action_count": len(actions),
         "traveled_distance_m": round(sum(
             float(item.get("moved_m", 0.0) or 0.0) for item in actions), 3),
         "signed_turn_deg": round(sum(
             float(item.get("turn_deg", 0.0) or 0.0) for item in actions), 2),
+        "commanded_turn_deg_total": round(sum(
+            float(item.get("commanded_turn_deg", 0.0) or 0.0)
+            for item in actions), 2),
+        "forward_command_count": action_names.count("move_forward"),
+        "left_turn_command_count": action_names.count("turn_left"),
+        "right_turn_command_count": action_names.count("turn_right"),
         "vertical_displacement_m": round(vertical_delta, 3),
         "horizontal_endpoint_displacement_m": round(
             horizontal_displacement, 3),
@@ -433,19 +500,133 @@ def trajectory_episode_index(trajectory, episode_dir):
     return int(Path(episode_dir).name.split("_")[-1])
 
 
-def verify_episode(trajectory_path, dataset_episode, backend,
-                   episode_index=None):
+def _stage_lookup(stages):
+    lookup = {}
+    for ordinal, stage in enumerate(stages):
+        stage_id = int(stage.get(
+            "stage_id", stage.get("sub_instruction_id", ordinal)))
+        lookup.setdefault(stage_id, (ordinal, stage))
+    return lookup
+
+
+def _run_one(backend, episode_dir, trajectory, stages, stage_lookup, scored,
+             candidate, stage_id, always_call_vlm=False):
+    target = candidate["target"]
+    score = scored[int(target["target_index"])]
+    images, evidence_paths, node_observations = _evidence_images(
+        episode_dir, trajectory, candidate)
+    if not _geometry_gate(score) and not always_call_vlm:
+        result = _geometry_rejection(score)
+    else:
+        ordinal, stage = stage_lookup[stage_id]
+        previous_stage = stages[ordinal - 1] if ordinal else None
+        next_stage = (stages[ordinal + 1]
+                      if ordinal + 1 < len(stages) else None)
+        result = _verify_one(
+            backend, stage, previous_stage, next_stage, target, score,
+            images, node_observations,
+            stage_targets=candidate.get("stage_targets"))
+    return {
+        "target_index": int(target["target_index"]),
+        "completion_field": candidate["field"],
+        "verification_source": "independent_rgb_action_trajectory_audit",
+        "online_completion_hidden_from_verifier": True,
+        "reference_path_exposed_to_online_navigation": False,
+        "evidence_artifacts": evidence_paths,
+        **result,
+    }
+
+
+def plan_episode(trajectory_path, dataset_episode, episode_index=None,
+                 include_unknown=False, always_call_vlm=False):
+    """Count the VLM calls a verify_episode run would make, without a backend."""
     trajectory_path = Path(trajectory_path)
     episode_dir = trajectory_path.parent
     trajectory = json.loads(trajectory_path.read_text())
     if episode_index is None:
         episode_index = trajectory_episode_index(trajectory, episode_dir)
     scored_episode = audit_episode(
-        episode_index, trajectory, dataset_episode, trajectory_path)
+        episode_index, trajectory, dataset_episode, trajectory_path,
+        hidden_geometry=load_hidden_geometry(episode_dir))
+    scored = {item["target_index"]: item
+              for item in scored_episode["targets"]}
+    stage_lookup = _stage_lookup(trajectory.get("instruction_stages") or [])
+    candidates = [
+        (stage_id, candidate) for stage_id, candidate
+        in system_stage_completion_candidates(trajectory).items()
+        if stage_id in stage_lookup]
+    judged = [item for item in system_all_judged_edges(trajectory)
+              if item["stage_id"] in stage_lookup] if include_unknown else []
+    judged_keys = {(int(item["target"]["target_index"]), item["field"],
+                    item["stage_id"]) for item in judged}
+    planned = 0
+    skipped = 0
+    reused = 0
+    for stage_id, candidate in candidates:
+        key = (int(candidate["target"]["target_index"]), candidate["field"],
+               stage_id)
+        if len(candidate.get("stage_targets") or []) <= 1 and key in judged_keys:
+            reused += 1
+            continue
+        score = scored[int(candidate["target"]["target_index"])]
+        if always_call_vlm or _geometry_gate(score):
+            planned += 1
+        else:
+            skipped += 1
+    for item in judged:
+        score = scored[int(item["target"]["target_index"])]
+        if always_call_vlm or _geometry_gate(score):
+            planned += 1
+        else:
+            skipped += 1
+    return {
+        "episode_id": trajectory.get("episode_id"),
+        "episode_index": episode_index,
+        "stage_candidates": len(candidates),
+        "judged_edges": len(judged),
+        "stage_candidates_reusing_edge_verdict": reused,
+        "planned_vlm_calls": planned,
+        "geometry_skipped_calls": skipped,
+    }
+
+
+def verify_episode(trajectory_path, dataset_episode, backend,
+                   episode_index=None, include_unknown=False,
+                   always_call_vlm=False):
+    trajectory_path = Path(trajectory_path)
+    episode_dir = trajectory_path.parent
+    trajectory = json.loads(trajectory_path.read_text())
+    if episode_index is None:
+        episode_index = trajectory_episode_index(trajectory, episode_dir)
+    scored_episode = audit_episode(
+        episode_index, trajectory, dataset_episode, trajectory_path,
+        hidden_geometry=load_hidden_geometry(episode_dir))
     scored = {item["target_index"]: item
               for item in scored_episode["targets"]}
     candidates = system_stage_completion_candidates(trajectory)
     stages = trajectory.get("instruction_stages") or []
+    stage_lookup = _stage_lookup(stages)
+    judgments = []
+    # A single-edge stage candidate and its completed judgment are the same
+    # edge with the same evidence; audit it once and reuse the verdict.
+    single_edge_results = {}
+    if include_unknown:
+        for candidate in system_all_judged_edges(trajectory):
+            if candidate["stage_id"] not in stage_lookup:
+                continue
+            result = _run_one(backend, episode_dir, trajectory, stages,
+                              stage_lookup, scored, candidate,
+                              candidate["stage_id"], always_call_vlm)
+            single_edge_results[(
+                result["target_index"], candidate["field"],
+                candidate["stage_id"])] = result
+            judgments.append({
+                "sub_instruction_id": candidate["stage_id"],
+                "online_status_output_only": candidate["online_status"],
+                "online_confidence_output_only": candidate[
+                    "online_confidence"],
+                **result,
+            })
     records = []
     for ordinal, stage in enumerate(stages):
         stage_id = int(stage.get(
@@ -462,30 +643,16 @@ def verify_episode(trajectory_path, dataset_episode, backend,
                 "evidence_artifacts": [str(trajectory_path)],
             })
             continue
-        target = candidate["target"]
-        score = scored[int(target["target_index"])]
-        images, evidence_paths, node_observations = _evidence_images(
-            episode_dir, trajectory, candidate)
-        if not _geometry_gate(score):
-            result = _geometry_rejection(score)
+        reuse_key = (int(candidate["target"]["target_index"]),
+                     candidate["field"], stage_id)
+        if (len(candidate.get("stage_targets") or []) <= 1 and
+                reuse_key in single_edge_results):
+            result = single_edge_results[reuse_key]
         else:
-            previous_stage = stages[ordinal - 1] if ordinal else None
-            next_stage = (stages[ordinal + 1]
-                          if ordinal + 1 < len(stages) else None)
-            result = _verify_one(
-                backend, stage, previous_stage, next_stage, target, score,
-                images, node_observations,
-                stage_targets=candidate.get("stage_targets"))
-        records.append({
-            "sub_instruction_id": stage_id,
-            "target_index": int(target["target_index"]),
-            "completion_field": candidate["field"],
-            "verification_source": "independent_rgb_action_trajectory_audit",
-            "online_completion_hidden_from_verifier": True,
-            "reference_path_exposed_to_online_navigation": False,
-            "evidence_artifacts": evidence_paths,
-            **result,
-        })
+            result = _run_one(backend, episode_dir, trajectory, stages,
+                              stage_lookup, scored, candidate, stage_id,
+                              always_call_vlm)
+        records.append({"sub_instruction_id": stage_id, **result})
     payload = {
         "schema_version": 1,
         "episode_index": episode_index,
@@ -496,9 +663,49 @@ def verify_episode(trajectory_path, dataset_episode, backend,
         "reference_path_usage": "post_run_verification_only",
         "stages": records,
     }
+    if include_unknown:
+        payload["judgments_policy"] = (
+            "every real judged edge (completed and unknown) audited "
+            "independently; online status recorded for labelling only"
+            + (", VLM called even when the geometry gate fails"
+               if always_call_vlm else ""))
+        payload["judgments"] = judgments
     output = episode_dir / "stage_completion_verification.json"
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     return output, payload
+
+
+def _iter_round_episodes(round_root, dataset, episode_ids=None):
+    for trajectory_path in sorted(round_root.rglob("trajectory.json")):
+        episode_dir = trajectory_path.parent
+        direct_serial_episode = episode_dir.parent.resolve() == (
+            round_root.resolve())
+        sharded_episode = episode_dir.parent.name.startswith("shard_")
+        focused_probe = episode_dir.resolve() == round_root.resolve()
+        if not ((episode_dir.name.startswith("episode_") and
+                 (direct_serial_episode or sharded_episode)) or focused_probe):
+            continue
+        trajectory = json.loads(trajectory_path.read_text())
+        if episode_ids is not None:
+            try:
+                if int(trajectory.get("episode_id")) not in episode_ids:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        if focused_probe:
+            episode_id = str(trajectory.get("episode_id"))
+            trajectory_id = str(trajectory.get("trajectory_id"))
+            matches = [index for index, item in enumerate(dataset)
+                       if str(item.get("episode_id")) == episode_id and
+                       str(item.get("trajectory_id")) == trajectory_id]
+            if len(matches) != 1:
+                raise RuntimeError(
+                    "focused probe trajectory does not uniquely identify "
+                    "one dataset episode")
+            episode_index = matches[0]
+        else:
+            episode_index = trajectory_episode_index(trajectory, episode_dir)
+        yield trajectory_path, episode_index
 
 
 def main():
@@ -509,48 +716,67 @@ def main():
                         help="optional KEY=VALUE file; relay credentials "
                              "otherwise come from the environment / local_env.sh")
     parser.add_argument("--model", default=None)
+    parser.add_argument("--include-unknown", action="store_true",
+                        help="also audit every unknown judgment, one record "
+                             "per judged edge, under payload['judgments']")
+    parser.add_argument("--always-call-vlm", action="store_true",
+                        help="call the verifier even when the hidden geometry "
+                             "gate fails (the gate is still AND-ed into the "
+                             "final verdict)")
+    parser.add_argument("--episode-ids", default=None,
+                        help="comma-separated episode_id filter (the R2R "
+                             "episode_id, not the dataset row index)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="print planned VLM call counts; no backend, no "
+                             "files written")
     args = parser.parse_args()
     dataset = _load_dataset(args.dataset)
+    episode_ids = None
+    if args.episode_ids:
+        episode_ids = {int(item) for item in args.episode_ids.split(",")
+                       if item.strip()}
+    episodes = list(_iter_round_episodes(args.round_root, dataset, episode_ids))
+    if args.dry_run:
+        total = {"episodes": 0, "planned_vlm_calls": 0,
+                 "geometry_skipped_calls": 0}
+        for trajectory_path, episode_index in episodes:
+            plan = plan_episode(
+                trajectory_path, dataset[episode_index],
+                episode_index=episode_index,
+                include_unknown=args.include_unknown,
+                always_call_vlm=args.always_call_vlm)
+            print(json.dumps(plan, ensure_ascii=False), flush=True)
+            total["episodes"] += 1
+            total["planned_vlm_calls"] += plan["planned_vlm_calls"]
+            total["geometry_skipped_calls"] += plan["geometry_skipped_calls"]
+        print(json.dumps({"dry_run_total": total}, ensure_ascii=False))
+        return
     backend = DeepSeekBackend(
         model=args.model, env_file=args.deepseek_env, timeout=180,
         image_detail="high")
     outputs = []
-    for trajectory_path in sorted(args.round_root.rglob("trajectory.json")):
-        episode_dir = trajectory_path.parent
-        direct_serial_episode = episode_dir.parent.resolve() == (
-            args.round_root.resolve())
-        sharded_episode = episode_dir.parent.name.startswith("shard_")
-        focused_probe = episode_dir.resolve() == args.round_root.resolve()
-        if ((episode_dir.name.startswith("episode_") and
-             (direct_serial_episode or sharded_episode)) or focused_probe):
-            trajectory = json.loads(trajectory_path.read_text())
-            if focused_probe:
-                episode_id = str(trajectory.get("episode_id"))
-                trajectory_id = str(trajectory.get("trajectory_id"))
-                matches = [index for index, item in enumerate(dataset)
-                           if str(item.get("episode_id")) == episode_id and
-                           str(item.get("trajectory_id")) == trajectory_id]
-                if len(matches) != 1:
-                    raise RuntimeError(
-                        "focused probe trajectory does not uniquely identify "
-                        "one dataset episode")
-                episode_index = matches[0]
-            else:
-                episode_index = trajectory_episode_index(
-                    trajectory, episode_dir)
-            output, payload = verify_episode(
-                trajectory_path, dataset[episode_index], backend,
-                episode_index=episode_index)
-            outputs.append({
-                "episode_index": episode_index,
-                "output": str(output),
-                "verified_stages": sum(
-                    item["semantic_completion_verified"] and
-                    item["ordered_stage_boundary_verified"]
-                    for item in payload["stages"]),
-                "stage_count": len(payload["stages"]),
-            })
-            print(json.dumps(outputs[-1], ensure_ascii=False), flush=True)
+    for trajectory_path, episode_index in episodes:
+        output, payload = verify_episode(
+            trajectory_path, dataset[episode_index], backend,
+            episode_index=episode_index,
+            include_unknown=args.include_unknown,
+            always_call_vlm=args.always_call_vlm)
+        summary = {
+            "episode_index": episode_index,
+            "output": str(output),
+            "verified_stages": sum(
+                item["semantic_completion_verified"] and
+                item["ordered_stage_boundary_verified"]
+                for item in payload["stages"]),
+            "stage_count": len(payload["stages"]),
+        }
+        if args.include_unknown:
+            summary["judged_edges"] = len(payload["judgments"])
+            summary["independently_verified_edges"] = sum(
+                item["semantic_completion_verified"]
+                for item in payload["judgments"])
+        outputs.append(summary)
+        print(json.dumps(outputs[-1], ensure_ascii=False), flush=True)
     (args.round_root / "stage_verification_summary.json").write_text(
         json.dumps({"episodes": outputs}, ensure_ascii=False, indent=2) + "\n")
 
