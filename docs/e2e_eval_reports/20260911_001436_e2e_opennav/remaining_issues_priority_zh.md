@@ -32,6 +32,9 @@
 
 **预期**：唯一一个"原因确定、修法机械、覆盖面几乎 100%"的问题。
 
+**已于 2026-09-11 修复**（`rgb_only_instruction_sequence.py`：每跳从 `motion_log` 取出 `turn_to_selected_target` 阶段实际发出的 `turn_left/turn_right`，作为 `step -T..-1`、`orientation_only=True`、`phase="turn_to_selected_target"` 的 RGB-only 动作记录前置到该边 `action_history`，并把转向前的前视帧存为 `edge_keyframes/target_XX_turn_start.jpg` 作第 0 张关键帧；八视图 refinement probe 不计入；执行器、选点器、判定 prompt 均未改）。新增测试 `tests/test_rgb_only_instruction_sequence.py::RGBOnlySequenceTurnHistoryTests`、`tests/test_rgb_only_edge_judge.py::test_turn_to_view_actions_are_counted_and_kept_in_prompt`，全量 314 个单元测试通过。
+真实 state 单点复现 `outputs/e2e_eval/20260911_113312_turn_history_smoke`（id 469、546，单 worker，2 条 `returncode=0`、契约审计通过）：两条的第一跳 "Turn right" 都在**第一次判定即 completed**（469 理由原话 "6 right-turn commands totaling ~90°"；上一轮分别耗了 3 跳、5 跳且各封锁 1 个方向）；裁判 prompt 里 `right_turn_command_count=6`。469 仍在 17.4 m 处误 STOP、546 终点 3.44 m（上一轮 5.09 m）——这是第 3 位（判定假阳性 / 保守）的问题，本项只保证裁判看到真实转向。未做十 EP 回归、未冻结。后续项：`RGBOnlyGraphBacktracker.recover()` 的 `rgb_only_backtrack_turn` 仍只记在 `motion_log`（回溯边不经裁判，影响较小）。
+
 ## 第 2 位：转弯句的"方向门"一空就整局结束
 
 **现象**：说"右转"时，选点器只允许看右边 2–3 个摄像头（方向门 `direction_gate`）。这几个画面里没有可走地面、或被封了一两个方向，候选就空了（`vlm_harness.py:2929` "No floor-bearing candidate remains inside the explicit right/left/rear direction gate"）——**24 条**因此终止（右 9、左 9、后 6），其中 **6 条一步都没走**（id 52、150、207、643、765、1087：第一句就是转弯或出房间，那一侧恰好没地面）。修完崩溃后这些变成优雅结束，但仍是整局零进展。
