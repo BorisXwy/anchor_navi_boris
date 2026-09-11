@@ -383,6 +383,9 @@ def main():
         "--sequence-min-classification-confidence", type=float, default=0.5)
     parser.add_argument(
         "--sequence-recovery-backtrack-attempts", type=int, default=4)
+    parser.add_argument(
+        "--backtrack-method", choices=["action-reversal", "visual"],
+        default="action-reversal")
     parser.add_argument("--backtrack-target-node", default=None)
     parser.add_argument("--backtrack-selector", choices=["auto", "hybrid", "vlm"],
                         default="auto")
@@ -447,6 +450,7 @@ def main():
             args.sequence_min_classification_confidence),
         "sequence_recovery_backtrack_attempts": (
             args.sequence_recovery_backtrack_attempts),
+        "backtrack_method": args.backtrack_method,
         "backtrack_planner_profile": args.backtrack_planner_profile,
         "backtrack_max_attempts_per_hop": (
             args.backtrack_max_attempts_per_hop),
@@ -500,6 +504,7 @@ def main():
                 str(args.sequence_min_classification_confidence),
                 "--sequence-recovery-backtrack-attempts",
                 str(args.sequence_recovery_backtrack_attempts),
+                "--backtrack-method", args.backtrack_method,
                 "--backtrack-planner-profile",
                 args.backtrack_planner_profile,
                 "--backtrack-max-attempts-per-hop",

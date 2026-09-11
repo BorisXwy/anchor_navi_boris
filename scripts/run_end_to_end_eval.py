@@ -378,6 +378,8 @@ def build_parser():
     run.add_argument("--max-steps-per-target", type=int, default=None)
     run.add_argument("--targets", type=int, default=None)
     run.add_argument("--sequence-max-exploration-hops", type=int, default=None)
+    run.add_argument("--backtrack-method", choices=["action-reversal", "visual"],
+                     default=None)
     run.add_argument("--point-selection-prompt-version", default=None)
     run.add_argument("--instruction-completion-prompt-version", default=None)
     run.add_argument("--seed", type=int, default=None)
@@ -406,6 +408,7 @@ def run_options_from_args(args):
         "max_steps_per_target": args.max_steps_per_target,
         "targets": args.targets,
         "sequence_max_exploration_hops": args.sequence_max_exploration_hops,
+        "backtrack_method": args.backtrack_method,
         "point_selection_prompt_version": args.point_selection_prompt_version,
         "instruction_completion_prompt_version": (
             args.instruction_completion_prompt_version),

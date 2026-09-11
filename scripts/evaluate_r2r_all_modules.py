@@ -621,6 +621,9 @@ def main():
                         default="breadcrumb_budget_v3")
     parser.add_argument("--max-steps-per-target", type=int, default=30)
     parser.add_argument("--sequence-max-exploration-hops", type=int, default=3)
+    parser.add_argument("--backtrack-method",
+                        choices=["action-reversal", "visual"],
+                        default="action-reversal")
     parser.add_argument("--rerun", action="store_true")
     args = parser.parse_args()
     if args.count < 1:
@@ -685,6 +688,7 @@ def main():
             "tracking_cluster_profile": args.tracking_cluster_profile,
             "max_steps_per_target": args.max_steps_per_target,
             "sequence_max_exploration_hops": args.sequence_max_exploration_hops,
+            "backtrack_method": args.backtrack_method,
             "backtrack_target": "node_0000",
             "backtrack_selector": "vlm",
             "backtrack_planner_profile": args.backtrack_planner_profile,
@@ -724,6 +728,7 @@ def main():
                 "--targets", "1",
                 "--sequence-max-exploration-hops",
                 str(args.sequence_max_exploration_hops),
+                "--backtrack-method", args.backtrack_method,
                 "--max-steps-per-target", str(args.max_steps_per_target),
                 "--floor-segmenter", args.floor_segmenter,
                 "--semantic-detector", args.semantic_detector,

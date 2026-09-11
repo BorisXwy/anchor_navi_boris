@@ -47,7 +47,8 @@ from instruction_completion_judge import (
 from breadth_first_exploration import BreadthFirstExplorationStrategy
 from instruction_sequence_exploration import InstructionSequenceExplorationStrategy
 from rgb_only_instruction_sequence import (
-    RGBOnlyInstructionSequenceExplorationStrategy,
+    BACKTRACK_METHODS, RGBOnlyInstructionSequenceExplorationStrategy,
+    turn_around_action_count,
 )
 from rgb_only_runtime import (
     RGBOnlyEvaluationVideoBridge, RGBOnlyPolicySimulator,
@@ -751,6 +752,13 @@ def _run_habitat_episode(argv=None):
     p.add_argument("--backtrack-max-hops", type=int, default=5)
     p.add_argument("--backtrack-reach-radius", type=float, default=0.75)
     p.add_argument("--backtrack-min-visual-similarity", type=float, default=0.75)
+    p.add_argument(
+        "--backtrack-method", choices=list(BACKTRACK_METHODS),
+        default="action-reversal",
+        help=("instruction-sequence physical recovery: action-reversal replays "
+              "the failed hop's commanded actions backwards and asks the VLM "
+              "to confirm the stored node; visual is the older VLM-guided "
+              "point-navigation search with an embedding similarity gate"))
     p.add_argument("--sequence-max-exploration-hops", type=int, default=30)
     p.add_argument("--sequence-max-blocked-directions", type=int, default=5)
     p.add_argument("--sequence-min-classification-confidence", type=float, default=0.5)
@@ -780,6 +788,11 @@ def _run_habitat_episode(argv=None):
         p.error(
             "rgb-only discrete turning requires --scan-step-deg to equal "
             "--turn-step-deg")
+    if args.backtrack_method == "action-reversal":
+        try:
+            turn_around_action_count(args.turn_step_deg)
+        except ValueError as exc:
+            p.error(f"--backtrack-method action-reversal: {exc}")
     if args.backtrack_only and args.backtrack_target_node is None:
         p.error("--backtrack-only requires --backtrack-target-node")
     if args.backtrack_only and args.initial_node_artifact is None:
@@ -1399,7 +1412,9 @@ def _run_habitat_episode(argv=None):
             recovery_minimum_visual_similarity=(
                 args.backtrack_min_visual_similarity),
             full_instruction=instruction,
-            views=args.views)
+            views=args.views,
+            backtrack_method=args.backtrack_method,
+            turn_step_deg=args.turn_step_deg)
         sequence_exploration_result = sequence_strategy.run(
             initial_action_heading=0.0, initial_global_step=total_step)
         yaw = sequence_exploration_result.final_yaw

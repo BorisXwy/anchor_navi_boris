@@ -203,7 +203,8 @@ class RecordingVLMHarness:
 
 
 def build_strategy(temporary_directory, point_selector, sub_instruction_count=2,
-                   executor=None, vlm_harness=None):
+                   executor=None, vlm_harness=None,
+                   backtrack_method="action-reversal"):
     raw = FakeRawSimulator()
     sim = RGBOnlyPolicySimulator(raw)
     graph = NavigationGraphMemory(
@@ -233,7 +234,8 @@ def build_strategy(temporary_directory, point_selector, sub_instruction_count=2,
         vlm_harness=(
             vlm_harness if vlm_harness is not None else UntouchableDependency()),
         segmenter=UntouchableDependency(),
-        output_dir=temporary_directory, max_exploration_hops=5)
+        output_dir=temporary_directory, max_exploration_hops=5,
+        backtrack_method=backtrack_method)
     return strategy, raw
 
 
@@ -335,7 +337,7 @@ class RGBOnlySequenceForwardStallTests(unittest.TestCase):
             strategy, raw = build_strategy(
                 temporary_directory, TurningPointSelector(0),
                 sub_instruction_count=1, executor=executor,
-                vlm_harness=harness)
+                vlm_harness=harness, backtrack_method="visual")
             backtracker = RecordingBacktracker()
             strategy.backtracker = backtracker
             origin_node_id = strategy.state.last_verified_node_id

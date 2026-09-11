@@ -270,6 +270,205 @@ class RGBOnlyGraphBacktracker:
             "rgb_only_backtrack_failed")
 
 
+BACKTRACK_METHODS = ("action-reversal", "visual")
+ACTION_REVERSAL_TURN_AROUND_PHASE = "action_reversal_turn_around"
+ACTION_REVERSAL_REPLAY_PHASE = "action_reversal_replay"
+ACTION_REVERSAL_RESTORE_HEADING_PHASE = "action_reversal_restore_heading"
+_REVERSED_ACTION = {
+    "move_forward": "move_forward",
+    "turn_left": "turn_right",
+    "turn_right": "turn_left",
+}
+
+
+def turn_around_action_count(turn_step_deg):
+    """Number of discrete turns in a half rotation; 180 must divide evenly."""
+    turns = 180.0 / float(turn_step_deg)
+    if abs(turns - round(turns)) > 1e-6:
+        raise ValueError(
+            "action-reversal backtracking needs 180 to be an integer multiple "
+            f"of the turn step, got turn_step_deg={turn_step_deg}")
+    return int(round(turns))
+
+
+def plan_action_reversal(action_history, turn_step_deg):
+    """Action records that physically undo ``action_history``.
+
+    Turn a half rotation in place, replay the hop backwards with left and
+    right swapped, then turn another half rotation so the action-frame
+    heading ends where the hop started.  Only the commanded discrete actions
+    are used; no pose is read or assumed.
+    """
+    turn_step_deg = float(turn_step_deg)
+    turn_count = turn_around_action_count(turn_step_deg)
+    plan = []
+
+    def append(action, phase):
+        commanded = (turn_step_deg if action == "turn_left" else
+                     -turn_step_deg if action == "turn_right" else 0.0)
+        plan.append({
+            "step": len(plan),
+            "action": action,
+            "commanded_turn_deg": commanded,
+            "forward_commanded": action == "move_forward",
+            "orientation_only": action != "move_forward",
+            "phase": phase,
+            "policy_input_contract": "rgb_only_v1",
+        })
+
+    for _ in range(turn_count):
+        append("turn_left", ACTION_REVERSAL_TURN_AROUND_PHASE)
+    for record in reversed(list(action_history)):
+        action = str(record.get("action"))
+        if action not in _REVERSED_ACTION:
+            raise ValueError(
+                f"cannot reverse unknown action {action!r} in action history")
+        append(_REVERSED_ACTION[action], ACTION_REVERSAL_REPLAY_PHASE)
+    for _ in range(turn_count):
+        append("turn_left", ACTION_REVERSAL_RESTORE_HEADING_PHASE)
+    return plan
+
+
+class RGBOnlyActionReversalBacktracker:
+    """Return to the hop's start node by replaying its actions in reverse.
+
+    The forward hop's commanded action history is deterministic, so undoing
+    it is a fixed action sequence rather than a fresh navigation problem.
+    Whether the agent really stands at the stored node again is decided by
+    the VLM comparing the stored and the current six-view panoramas; the
+    panorama embedding similarity is recorded for audits but never gates.
+    """
+
+    method = "action-reversal"
+
+    def __init__(self, sim, graph_memory, vlm_harness, turn_step_deg=15.0,
+                 video_composer=None, full_instruction=None):
+        self.sim = require_rgb_only_policy_sim(sim)
+        self.graph_memory = graph_memory
+        self.vlm_harness = vlm_harness
+        self.turn_step_deg = float(turn_step_deg)
+        self.turn_around_actions = turn_around_action_count(self.turn_step_deg)
+        self.video_composer = video_composer
+        self.full_instruction = str(full_instruction or "")
+        self.embedder = CompactVisualEmbedder()
+
+    def _emit_video(self, rgb, instruction, target_index, phase):
+        if self.video_composer is None:
+            return
+        bgr = np.ascontiguousarray(np.asarray(rgb, np.uint8)[..., :3][..., ::-1])
+        self.video_composer.emit(
+            bgr, instruction, target_index, phase,
+            full_instruction=self.full_instruction or instruction,
+            sub_instruction=instruction)
+
+    def recover(self, target_node_id, action_heading, global_step,
+                target_index, forward_action_history, *, create_revisit_node):
+        target_node_id = str(target_node_id)
+        target_node = self.graph_memory.get_node(target_node_id)
+        target_views = self.graph_memory.load_node_views(target_node_id)
+        instruction = f"reverse action history back to node {target_node_id}"
+        plan = plan_action_reversal(forward_action_history, self.turn_step_deg)
+        self.sim.emit_evaluation_event("action_reversal_backtrack_started", {
+            "target_node_id": target_node_id,
+            "target_index": int(target_index),
+            "forward_step_count": len(list(forward_action_history)),
+            "reversal_step_count": len(plan),
+        })
+        heading = float(action_heading)
+        step = int(global_step)
+        for record in plan:
+            observations = self.sim.step(record["action"])
+            heading = wrap_angle(
+                heading + math.radians(record["commanded_turn_deg"]))
+            step += 1
+            self._emit_video(observations["rgb"], instruction, target_index,
+                             record["phase"])
+
+        current_views = observe_six_rgb(self.sim)
+        similarity = _cosine(
+            self.embedder.embed(current_views), target_node.visual_embedding)
+        attempt = {
+            "attempt_index": 0,
+            "backtrack_method": self.method,
+            "turn_around_actions": self.turn_around_actions,
+            "forward_step_count": len(list(forward_action_history)),
+            "action_history": plan,
+            "executor_arrived": None,
+            "target_panorama_similarity_after": similarity,
+            "vlm_node_revisit": None,
+            "policy_input_contract": "rgb_only_v1",
+            "privileged_inputs_used": [],
+        }
+        try:
+            verdict = self.vlm_harness.judge_node_revisit_rgb_only(
+                target_node_id=target_node_id,
+                target_node_views=target_views,
+                current_views=current_views,
+                reversal_action_history=plan)
+        except RuntimeError as exc:
+            attempt["selection_error"] = str(exc)
+            self.sim.emit_evaluation_event(
+                "action_reversal_backtrack_finished", {
+                    "target_node_id": target_node_id,
+                    "same_place": None, "similarity": similarity,
+                    "error": str(exc)})
+            return RGBOnlyBacktrackResult(
+                False, target_node_id, None, heading, step, [attempt],
+                "action_reversal_vlm_error")
+        attempt["vlm_node_revisit"] = verdict
+        same_place = bool(verdict.get("same_place"))
+        self.sim.emit_evaluation_event("action_reversal_backtrack_finished", {
+            "target_node_id": target_node_id,
+            "same_place": same_place,
+            "confidence": float(verdict.get("confidence", 0.0)),
+            "similarity": similarity,
+        })
+        if not same_place:
+            return RGBOnlyBacktrackResult(
+                False, target_node_id, None, heading, step, [attempt],
+                "action_reversal_return_rejected_by_vlm")
+        if not create_revisit_node:
+            return RGBOnlyBacktrackResult(
+                True, target_node_id, target_node_id, heading, step, [attempt],
+                "action_reversal_return_confirmed")
+
+        completion_views = observe_eight_rgb(self.sim)
+        node, edge = self.graph_memory.add_navigation_stop_node(
+            position_xyz=None, base_yaw_rad=None, global_step=step,
+            six_views=current_views, six_depths=None,
+            sub_instruction={
+                "navigation_instruction": instruction,
+                "semantic_spatial_target": "stored node panorama",
+            },
+            action_history=plan,
+            arrival_signal="action_reversal_node_revisit_confirmed",
+            completion_views=completion_views,
+            metadata={
+                "policy_input_contract": "rgb_only_v1",
+                "rgb_revisit_target_node_id": target_node_id,
+                "rgb_panorama_similarity": similarity,
+                "backtrack_method": self.method,
+                "vlm_node_revisit": verdict,
+            },
+            edge_kind="rgb_only_action_reversal_backtrack",
+            edge_metadata={
+                "policy_input_contract": "rgb_only_v1",
+                "backtrack_method": self.method,
+            })
+        self.graph_memory.add_loop_closure_edge(
+            target_node_id, node.node_id, metadata={
+                "verification": "vlm_node_revisit_confirmation",
+                "similarity": similarity,
+                "vlm_confidence": float(verdict.get("confidence", 0.0)),
+                "policy_input_contract": "rgb_only_v1",
+            })
+        attempt["recovered_node_id"] = node.node_id
+        attempt["recovery_edge_id"] = edge.edge_id
+        return RGBOnlyBacktrackResult(
+            True, target_node_id, node.node_id, heading, step, [attempt],
+            "action_reversal_return_confirmed_node_recorded")
+
+
 class RGBOnlyInstructionSequenceExplorationStrategy:
     """Ordered semantic navigation with an enforced RGB-only data plane."""
 
@@ -284,7 +483,12 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
             minimum_classification_confidence=0.5,
             recovery_backtrack_attempts_per_hop=2,
             recovery_minimum_visual_similarity=0.75,
-            full_instruction=None, views=8, scan_step_deg=15.0):
+            full_instruction=None, views=8, scan_step_deg=15.0,
+            backtrack_method="action-reversal", turn_step_deg=None):
+        if backtrack_method not in BACKTRACK_METHODS:
+            raise ValueError(
+                f"unknown backtrack_method {backtrack_method!r}; "
+                f"expected one of {BACKTRACK_METHODS}")
         self.sim = require_rgb_only_policy_sim(sim)
         self.sub_instructions = list(sub_instructions)
         self.point_selector = point_selector
@@ -314,6 +518,25 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
             scan_step_deg=scan_step_deg,
             max_attempts=recovery_backtrack_attempts_per_hop,
             minimum_visual_similarity=recovery_minimum_visual_similarity)
+        self.backtrack_method = str(backtrack_method)
+        # Discrete turning keeps the scan step equal to the simulator turn
+        # step (the CLI enforces it), so the scan step is the default here.
+        self.action_reversal_backtracker = RGBOnlyActionReversalBacktracker(
+            sim, graph_memory, vlm_harness,
+            turn_step_deg=(scan_step_deg if turn_step_deg is None
+                           else turn_step_deg),
+            video_composer=video_composer,
+            full_instruction=self.full_instruction)
+
+    def _recover(self, target_node_id, heading, global_step, target_index,
+                 action_history, *, create_revisit_node):
+        if self.backtrack_method == "action-reversal":
+            return self.action_reversal_backtracker.recover(
+                target_node_id, heading, global_step, target_index,
+                action_history, create_revisit_node=create_revisit_node)
+        return self.backtracker.recover(
+            target_node_id, heading, global_step, target_index,
+            action_history)
 
     def run(self, initial_action_heading=0.0, initial_global_step=0):
         heading = float(initial_action_heading)
@@ -340,6 +563,10 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
             # what the agent saw before turning so the edge can include them.
             motion_log_start = len(self.motion_log)
             turn_start_rgb = observe(self.sim)
+            hop_start_heading = heading
+            hop_start_node_id = self.graph_memory.nodes[-1].node_id
+            hop_start_previous_action_history = previous_action_history
+            hop_start_has_incoming_edge = has_incoming_edge
             try:
                 selection = self.point_selector.select(PointSelectionRequest(
                     sim=self.sim, position=None, yaw=heading, stage=stage,
@@ -430,22 +657,42 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
             })
 
             if not navigation.arrived:
-                recovery = self.backtracker.recover(
-                    self.state.last_verified_node_id, heading, global_step,
+                action_reversal = self.backtrack_method == "action-reversal"
+                # Action reversal undoes exactly this hop, so it returns to
+                # the node the hop launched from; the visual method searches
+                # for the last verified node instead.  A failed hop never
+                # becomes a node, so neither path records a revisit node.
+                recovery = self._recover(
+                    (hop_start_node_id if action_reversal
+                     else self.state.last_verified_node_id),
+                    heading, global_step,
                     len(self.sub_instructions) + hop_index,
-                    action_history)
+                    action_history, create_revisit_node=False)
                 record["physical_failure_recovery"] = recovery.to_dict()
-                recoveries.append(recovery.to_dict())
+                record["backtrack_method"] = self.backtrack_method
+                recoveries.append(dict(
+                    recovery.to_dict(), backtrack_method=self.backtrack_method,
+                    trigger="physical_failure"))
                 if not recovery.success:
                     end_reason = "rgb_only_physical_failure_recovery_failed"
                     break
                 heading = recovery.final_action_heading_rad
                 global_step = recovery.next_global_step
                 self.state.block_failed_physical_direction(selected_heading)
-                previous_action_history = (
-                    recovery.attempts[-1].get("action_history", [])
-                    if recovery.attempts else [])
-                has_incoming_edge = True
+                if action_reversal:
+                    # The agent stands where the hop began with the same
+                    # heading; the only new knowledge is the blocked ray.
+                    if abs(wrap_angle(heading - hop_start_heading)) > 1e-6:
+                        raise RuntimeError(
+                            "action reversal did not restore the hop start "
+                            f"heading: {heading} vs {hop_start_heading}")
+                    previous_action_history = hop_start_previous_action_history
+                    has_incoming_edge = hop_start_has_incoming_edge
+                else:
+                    previous_action_history = (
+                        recovery.attempts[-1].get("action_history", [])
+                        if recovery.attempts else [])
+                    has_incoming_edge = True
                 continue
 
             stop_rgbs = observe_six_rgb(self.sim)
@@ -501,12 +748,27 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
             has_incoming_edge = True
 
             if directive.action == "backtrack_and_block":
-                recovery = self.backtracker.recover(
-                    directive.backtrack_target_node_id, heading, global_step,
+                backtrack_target = str(directive.backtrack_target_node_id)
+                if self.backtrack_method == "action-reversal":
+                    # Reversal only undoes the edge that just ended at the
+                    # current node, so the target must be its predecessor.
+                    predecessor, _ = self.graph_memory.predecessor(
+                        stop_node.node_id)
+                    if predecessor.node_id != backtrack_target:
+                        raise RuntimeError(
+                            "action reversal can only return along the last "
+                            f"edge: target {backtrack_target} is not the "
+                            f"predecessor {predecessor.node_id} of "
+                            f"{stop_node.node_id}")
+                recovery = self._recover(
+                    backtrack_target, heading, global_step,
                     len(self.sub_instructions) + hop_index,
-                    action_history)
+                    action_history, create_revisit_node=True)
                 record["sequence_recovery_backtrack"] = recovery.to_dict()
-                recoveries.append(recovery.to_dict())
+                record["backtrack_method"] = self.backtrack_method
+                recoveries.append(dict(
+                    recovery.to_dict(), backtrack_method=self.backtrack_method,
+                    trigger="backtrack_and_block"))
                 if not recovery.success:
                     self.state.on_backtrack(False)
                     end_reason = "rgb_only_sequence_recovery_failed"

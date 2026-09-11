@@ -1151,6 +1151,10 @@ class HeuristicBackend(VLMBackend):
                     "current_steps_above": True,
                 }
             return result
+        if "RGB_ONLY_NODE_REVISIT_CONFIRMATION" in prompt:
+            return {"same_place": True, "confidence": 0.9,
+                    "reason": "heuristic backend accepts the reversed-action return",
+                    "visual_evidence": "panoramas not inspected"}
         if "BACKTRACK_GROUND_TARGET_SELECTION" in prompt:
             recommended = re.search(
                 r"Recommended current view from graph geometry:\s*([0-9]+)", prompt)
@@ -1237,6 +1241,16 @@ class NavigationVLMHarness:
         "required": ["status", "confidence", "reason", "visual_evidence"],
         "properties": {
             "status": {"type": "string", "enum": ["completed", "unknown"]},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "reason": {"type": "string", "maxLength": 240},
+            "visual_evidence": {"type": "string", "maxLength": 240},
+        },
+    }
+    NODE_REVISIT_SCHEMA = {
+        "type": "object",
+        "required": ["same_place", "confidence", "reason", "visual_evidence"],
+        "properties": {
+            "same_place": {"type": "boolean"},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
             "reason": {"type": "string", "maxLength": 240},
             "visual_evidence": {"type": "string", "maxLength": 240},
@@ -1652,6 +1666,10 @@ class NavigationVLMHarness:
         "v23_relation_geometry_guard",
         "v24_multireference_threshold_calibration",
     }
+    NODE_REVISIT_PROMPT_VERSIONS = {
+        "v1_two_panorama_same_place",
+    }
+    DEFAULT_NODE_REVISIT_PROMPT_VERSION = "v1_two_panorama_same_place"
 
     EIGHT_VIEW_FORM_RULES = {
         "PASS_LANDMARK": (
@@ -7312,6 +7330,74 @@ and one numbered anchor. Return JSON only."""
         return self._call(
             "select_backtrack_ground_target_rgb_only", prompt,
             [two_node_sheet], schema, validate)
+
+    def judge_node_revisit_rgb_only(
+            self, target_node_id, target_node_views, current_views,
+            reversal_action_history=None,
+            prompt_version=DEFAULT_NODE_REVISIT_PROMPT_VERSION):
+        """Decide from two six-view panoramas whether the agent is back at a node."""
+        if len(target_node_views) != 6 or len(current_views) != 6:
+            raise ValueError(
+                "RGB-only node revisit confirmation requires two complete "
+                "six-view panoramas")
+        if prompt_version not in self.NODE_REVISIT_PROMPT_VERSIONS:
+            raise ValueError(
+                f"unknown node revisit prompt version {prompt_version!r}; "
+                f"expected one of {sorted(self.NODE_REVISIT_PROMPT_VERSIONS)}")
+        target_sheet = self._contact_sheet([
+            self._overlay(np.asarray(rgb, np.uint8)[..., :3],
+                          np.zeros(np.asarray(rgb).shape[:2], bool), index, False)
+            for index, rgb in enumerate(target_node_views)])
+        current_sheet = self._contact_sheet([
+            self._overlay(np.asarray(rgb, np.uint8)[..., :3],
+                          np.zeros(np.asarray(rgb).shape[:2], bool), index, False)
+            for index, rgb in enumerate(current_views)])
+        two_node_sheet = np.concatenate([target_sheet, current_sheet], axis=0)
+        actions = [{
+            key: value for key, value in dict(record).items()
+            if key in {"step", "action", "commanded_turn_deg", "phase"}
+        } for record in (reversal_action_history or [])]
+        prompt = f"""RGB_ONLY_NODE_REVISIT_CONFIRMATION
+The robot left stored graph node {target_node_id}, failed to reach its
+target, and then physically replayed its own commanded actions in reverse to
+walk back. The TOP half is the six-view panorama recorded at node
+{target_node_id} before leaving; the BOTTOM half is the six-view panorama
+observed right now. Views are numbered 0-5 at the same 60-degree offsets in
+both halves, so view k on top should correspond to view k below if the robot
+is back at the node with the same heading.
+
+Reversal actions issued, supplied only as causal history:
+{json.dumps(actions, ensure_ascii=False)}
+
+Decide whether the BOTTOM panorama was captured at the same physical place as
+the TOP panorama. Small offsets of a few tens of centimetres or a slight
+heading difference still count as the same place; a different room, corridor
+segment, or a viewpoint on the other side of a doorway does not. Compare
+walls, doorways, furniture, floor pattern, and their arrangement across the
+matching views. Do not infer or request pose, depth, metric distance,
+collision, navmesh, shortest path, compass, or world coordinates. Return JSON
+only with same_place, confidence, reason, visual_evidence."""
+
+        def validate(result):
+            if not isinstance(result.get("same_place"), bool):
+                raise ValueError("same_place must be a JSON boolean")
+            confidence = float(result.get("confidence", 0.0))
+            if not 0.0 <= confidence <= 1.0:
+                raise ValueError("confidence must be within [0, 1]")
+            return {
+                "same_place": bool(result["same_place"]),
+                "confidence": confidence,
+                "reason": str(result.get("reason", "")),
+                "visual_evidence": str(result.get("visual_evidence", "")),
+                "target_node_id": str(target_node_id),
+                "prompt_version": prompt_version,
+                "policy_input_contract": "rgb_only_v1",
+                "privileged_inputs_used": [],
+            }
+
+        return self._call(
+            "judge_node_revisit_rgb_only", prompt, [two_node_sheet],
+            self.NODE_REVISIT_SCHEMA, validate)
 
     def select_turn_landmark_alignment(self, sub_instruction,
                                        current_eight_views,
