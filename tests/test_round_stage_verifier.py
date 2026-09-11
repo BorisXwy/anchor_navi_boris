@@ -178,19 +178,46 @@ class RoundStageVerifierTest(unittest.TestCase):
             {"navigation_graph_edge_id": "edge_9999"}, edges_by_id), [])
 
     def test_motion_summary_counts_commanded_actions_without_pose(self):
-        summary = _motion_summary({"action_history": [
+        target = {"target_index": 3, "action_history": [
             {"action": "turn_right", "commanded_turn_deg": -15.0},
             {"action": "turn_right", "commanded_turn_deg": -15.0},
-            {"action": "move_forward", "commanded_turn_deg": 0.0},
+            {"action": "move_forward", "commanded_turn_deg": 0.0,
+             "rgb_motion_score": 20.0},
             {"action": "turn_left", "commanded_turn_deg": 15.0},
-        ]})
+        ]}
+        summary = _motion_summary(target)
         self.assertEqual(summary["action_count"], 4)
         self.assertEqual(summary["forward_command_count"], 1)
         self.assertEqual(summary["right_turn_command_count"], 2)
         self.assertEqual(summary["left_turn_command_count"], 1)
         self.assertEqual(summary["commanded_turn_deg_total"], -15.0)
-        self.assertEqual(summary["signed_turn_deg"], 0.0)
-        self.assertEqual(summary["traveled_distance_m"], 0.0)
+        self.assertEqual(summary["mean_rgb_motion_score"], 20.0)
+        # Unmeasured motion must not be reported as zero movement.
+        self.assertFalse(summary["measured_motion_available"])
+        self.assertIsNone(summary["signed_turn_deg"])
+        self.assertIsNone(summary["traveled_distance_m"])
+        self.assertIsNone(summary["blocked_action_count"])
+        self.assertIsNone(summary["horizontal_endpoint_displacement_m"])
+        self.assertEqual(summary["displacement_source"], "unavailable")
+        with_geometry = _motion_summary(target, hidden_geometry={3: {
+            "start_xyz": [0.0, 0.0, 0.0], "end_xyz": [3.0, 0.5, 4.0]}})
+        self.assertEqual(with_geometry["horizontal_endpoint_displacement_m"], 5.0)
+        self.assertEqual(with_geometry["vertical_displacement_m"], 0.5)
+        self.assertEqual(with_geometry["displacement_source"],
+                         "postrun_hidden_geometry")
+
+    def test_motion_summary_keeps_measured_legacy_fields(self):
+        summary = _motion_summary({"action_history": [
+            {"action": "move_forward", "moved_m": 0.25, "turn_deg": 0.0,
+             "position_xyz": [0.0, 0.0, 0.0]},
+            {"action": "move_forward", "moved_m": 0.0, "turn_deg": 0.0,
+             "position_xyz": [0.0, 0.0, 0.25]},
+        ]})
+        self.assertTrue(summary["measured_motion_available"])
+        self.assertEqual(summary["traveled_distance_m"], 0.25)
+        self.assertEqual(summary["blocked_action_count"], 1)
+        self.assertEqual(summary["horizontal_endpoint_displacement_m"], 0.25)
+        self.assertEqual(summary["displacement_source"], "online_action_history")
 
     def test_verdict_still_ands_geometry_gate_when_vlm_is_forced(self):
         class Backend:

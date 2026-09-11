@@ -283,39 +283,75 @@ def _evidence_images(episode_dir, trajectory, candidate):
     return images, evidence_paths, node_observations
 
 
-def _motion_summary(target, stage_targets=None):
+def _motion_summary(target, stage_targets=None, hidden_geometry=None):
+    """Summarise the executed span for the verifier prompt.
+
+    Legacy action histories carry measured ``moved_m``/``turn_deg``/
+    ``position_xyz``.  rgb_only_v1 histories carry only commanded actions and
+    an RGB motion score, so the measured fields are reported as unavailable
+    (never as zero, which would read as "did not move") and the endpoint
+    displacement comes from post-run hidden geometry when it is supplied.
+    """
     targets = list(stage_targets or [target])
     actions = [action for item in targets
                for action in item.get("action_history", [])]
+    measured = any("moved_m" in item or "position_xyz" in item
+                   for item in actions)
     positions = [item.get("position_xyz") for item in actions
                  if isinstance(item.get("position_xyz"), (list, tuple)) and
                  len(item.get("position_xyz")) >= 3]
-    vertical_delta = 0.0
-    horizontal_displacement = 0.0
+    vertical_delta = None
+    horizontal_displacement = None
+    displacement_source = "unavailable"
     if len(positions) >= 2:
         start = np.asarray(positions[0], np.float64)
         end = np.asarray(positions[-1], np.float64)
-        vertical_delta = float(end[1] - start[1])
-        horizontal_displacement = float(np.linalg.norm((end - start)[[0, 2]]))
+        displacement_source = "online_action_history"
+    else:
+        first = (hidden_geometry or {}).get(
+            int(targets[0].get("target_index", -1)), {})
+        last = (hidden_geometry or {}).get(
+            int(targets[-1].get("target_index", -1)), {})
+        start = first.get("start_xyz")
+        end = last.get("end_xyz")
+        if start is not None and end is not None:
+            start = np.asarray(start, np.float64)
+            end = np.asarray(end, np.float64)
+            displacement_source = "postrun_hidden_geometry"
+        else:
+            start = end = None
+    if start is not None and end is not None:
+        vertical_delta = round(float(end[1] - start[1]), 3)
+        horizontal_displacement = round(
+            float(np.linalg.norm((end - start)[[0, 2]])), 3)
     action_names = [str(item.get("action", "")) for item in actions]
+    motion_scores = [float(item["rgb_motion_score"]) for item in actions
+                     if item.get("rgb_motion_score") is not None]
     return {
         "action_count": len(actions),
         "traveled_distance_m": round(sum(
-            float(item.get("moved_m", 0.0) or 0.0) for item in actions), 3),
+            float(item.get("moved_m", 0.0) or 0.0) for item in actions), 3)
+        if measured else None,
         "signed_turn_deg": round(sum(
-            float(item.get("turn_deg", 0.0) or 0.0) for item in actions), 2),
+            float(item.get("turn_deg", 0.0) or 0.0) for item in actions), 2)
+        if measured else None,
         "commanded_turn_deg_total": round(sum(
             float(item.get("commanded_turn_deg", 0.0) or 0.0)
             for item in actions), 2),
         "forward_command_count": action_names.count("move_forward"),
         "left_turn_command_count": action_names.count("turn_left"),
         "right_turn_command_count": action_names.count("turn_right"),
-        "vertical_displacement_m": round(vertical_delta, 3),
-        "horizontal_endpoint_displacement_m": round(
-            horizontal_displacement, 3),
+        "mean_rgb_motion_score": (
+            round(sum(motion_scores) / len(motion_scores), 2)
+            if motion_scores else None),
+        "vertical_displacement_m": vertical_delta,
+        "horizontal_endpoint_displacement_m": horizontal_displacement,
+        "displacement_source": displacement_source,
         "blocked_action_count": sum(
             float(item.get("moved_m", 0.0) or 0.0) < 0.01 and
-            "forward" in str(item.get("action", "")) for item in actions),
+            "forward" in str(item.get("action", "")) for item in actions)
+        if measured else None,
+        "measured_motion_available": measured,
         "point_edge_count": len(targets),
         "point_target_indices": [
             int(item.get("target_index", -1)) for item in targets],
@@ -355,7 +391,8 @@ def _geometry_rejection(scored):
 
 
 def _verify_one(backend, stage, previous_stage, next_stage, target, scored,
-                images, node_observations=None, stage_targets=None):
+                images, node_observations=None, stage_targets=None,
+                hidden_geometry=None):
     previous_text = ((previous_stage or {}).get("navigation_instruction") or
                      "NONE (this is the first stage)")
     next_text = ((next_stage or {}).get("navigation_instruction") or
@@ -375,7 +412,8 @@ Required spatial target: {stage.get('semantic_spatial_target', '')}
 Completion cue: {stage.get('completion_cue', '')}
 Arrival evidence: {stage.get('visual_arrival_evidence', '')}
 Forbidden endpoint: {stage.get('forbidden_target', '')}
-Executed motion summary: {json.dumps(_motion_summary(target, stage_targets))}
+Executed motion summary: {json.dumps(
+    _motion_summary(target, stage_targets, hidden_geometry))}
 Saved node semantic observations: {json.dumps(
     node_observations or {}, ensure_ascii=False)}
 
@@ -510,7 +548,7 @@ def _stage_lookup(stages):
 
 
 def _run_one(backend, episode_dir, trajectory, stages, stage_lookup, scored,
-             candidate, stage_id, always_call_vlm=False):
+             candidate, stage_id, always_call_vlm=False, hidden_geometry=None):
     target = candidate["target"]
     score = scored[int(target["target_index"])]
     images, evidence_paths, node_observations = _evidence_images(
@@ -525,7 +563,8 @@ def _run_one(backend, episode_dir, trajectory, stages, stage_lookup, scored,
         result = _verify_one(
             backend, stage, previous_stage, next_stage, target, score,
             images, node_observations,
-            stage_targets=candidate.get("stage_targets"))
+            stage_targets=candidate.get("stage_targets"),
+            hidden_geometry=hidden_geometry)
     return {
         "target_index": int(target["target_index"]),
         "completion_field": candidate["field"],
@@ -598,9 +637,10 @@ def verify_episode(trajectory_path, dataset_episode, backend,
     trajectory = json.loads(trajectory_path.read_text())
     if episode_index is None:
         episode_index = trajectory_episode_index(trajectory, episode_dir)
+    hidden_geometry = load_hidden_geometry(episode_dir)
     scored_episode = audit_episode(
         episode_index, trajectory, dataset_episode, trajectory_path,
-        hidden_geometry=load_hidden_geometry(episode_dir))
+        hidden_geometry=hidden_geometry)
     scored = {item["target_index"]: item
               for item in scored_episode["targets"]}
     candidates = system_stage_completion_candidates(trajectory)
@@ -616,7 +656,8 @@ def verify_episode(trajectory_path, dataset_episode, backend,
                 continue
             result = _run_one(backend, episode_dir, trajectory, stages,
                               stage_lookup, scored, candidate,
-                              candidate["stage_id"], always_call_vlm)
+                              candidate["stage_id"], always_call_vlm,
+                              hidden_geometry)
             single_edge_results[(
                 result["target_index"], candidate["field"],
                 candidate["stage_id"])] = result
@@ -651,7 +692,7 @@ def verify_episode(trajectory_path, dataset_episode, backend,
         else:
             result = _run_one(backend, episode_dir, trajectory, stages,
                               stage_lookup, scored, candidate, stage_id,
-                              always_call_vlm)
+                              always_call_vlm, hidden_geometry)
         records.append({"sub_instruction_id": stage_id, **result})
     payload = {
         "schema_version": 1,
