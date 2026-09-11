@@ -21,7 +21,7 @@ from navigation_graph_memory import NavigationGraphMemory  # noqa: E402
 from point_navigation_executor import PointNavigationResult  # noqa: E402
 from point_selectors import PointSelectionResult  # noqa: E402
 from rgb_only_instruction_sequence import (  # noqa: E402
-    RGBOnlyInstructionSequenceExplorationStrategy,
+    RGBOnlyBacktrackResult, RGBOnlyInstructionSequenceExplorationStrategy,
 )
 from rgb_only_runtime import RGBOnlyPolicySimulator  # noqa: E402
 from vlm_harness import VLMProviderFatalError  # noqa: E402
@@ -148,6 +148,46 @@ class ForwardExecutor:
                     "edge_keyframes": keyframe_records,
                     "arrival_signal": "rgb_only_dense_stop_cluster_arrival"},
             edge_keyframes=frames)
+
+
+class StallingExecutor(ForwardExecutor):
+    """First hop ends as an RGB forward stall, later hops arrive normally."""
+
+    def execute(self, request):
+        result = super().execute(request)
+        if len(self.requests) > 1:
+            return result
+        stalled_actions = [dict(item, rgb_motion_score=0.0,
+                                stall_forward_streak=index + 1)
+                           for index, item in enumerate(result.action_history)]
+        record = dict(result.record, action_history=stalled_actions,
+                      arrival_signal=None, end_reason="rgb_forward_stall",
+                      terminal_stall_forward_streak=len(stalled_actions))
+        return PointNavigationResult(
+            arrived=False, signal=None, end_reason="rgb_forward_stall",
+            final_rgb=result.final_rgb, final_yaw=result.final_yaw,
+            next_global_step=result.next_global_step,
+            action_history=stalled_actions, record=record,
+            edge_keyframes=result.edge_keyframes)
+
+
+class RecordingBacktracker:
+    def __init__(self):
+        self.calls = []
+
+    def recover(self, target_node_id, heading, global_step, target_index,
+                failed_action_history):
+        self.calls.append({
+            "target_node_id": target_node_id,
+            "failed_end_reasons": [
+                item.get("stall_forward_streak") for item in failed_action_history],
+        })
+        return RGBOnlyBacktrackResult(
+            success=True, target_node_id=target_node_id,
+            recovered_node_id=target_node_id,
+            final_action_heading_rad=float(heading),
+            next_global_step=int(global_step), attempts=[],
+            end_reason="rgb_only_backtrack_already_at_node")
 
 
 class RecordingVLMHarness:
@@ -285,6 +325,42 @@ class RGBOnlySequenceTurnHistoryTests(unittest.TestCase):
             self.assertFalse(
                 (Path(temporary_directory) / "edge_keyframes" /
                  "target_00_turn_start.jpg").exists())
+
+
+class RGBOnlySequenceForwardStallTests(unittest.TestCase):
+    def test_stalled_hop_backtracks_blocks_direction_and_continues(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            executor = StallingExecutor(temporary_directory)
+            harness = RecordingVLMHarness()
+            strategy, raw = build_strategy(
+                temporary_directory, TurningPointSelector(0),
+                sub_instruction_count=1, executor=executor,
+                vlm_harness=harness)
+            backtracker = RecordingBacktracker()
+            strategy.backtracker = backtracker
+            origin_node_id = strategy.state.last_verified_node_id
+            result = strategy.run(initial_action_heading=0.0,
+                                  initial_global_step=0)
+
+            self.assertTrue(result.success)
+            self.assertEqual(result.end_reason, "instruction_sequence_complete")
+            self.assertEqual(len(executor.requests), 2)
+
+            stalled, arrived = result.records[0], result.records[1]
+            self.assertEqual(stalled["end_reason"], "rgb_forward_stall")
+            self.assertFalse(stalled["arrived"])
+            self.assertIn("physical_failure_recovery", stalled)
+            self.assertEqual(len(backtracker.calls), 1)
+            self.assertEqual(backtracker.calls[0]["failed_end_reasons"],
+                             list(range(1, EXECUTOR_STEPS + 1)))
+            self.assertEqual(
+                strategy.state.blocked_yaws_by_verified_node[origin_node_id],
+                [0.0])
+            self.assertTrue(arrived["arrived"])
+            self.assertNotIn("physical_failure_recovery", arrived)
+            # A stalled hop never becomes a graph node; only the arrival did.
+            self.assertEqual(len(strategy.graph_memory.edges), 1)
+            self.assertEqual(len(harness.judge_calls), 1)
 
 
 class RGBOnlySequenceSelectionFailureTests(unittest.TestCase):

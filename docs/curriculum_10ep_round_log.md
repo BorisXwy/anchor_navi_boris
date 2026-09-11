@@ -2072,3 +2072,33 @@
   候选，EP27 在长错误探索后耗尽已 block 方向；其共同瓶颈已从物理到达转为“正确节点之后的
   语义终点地面候选缺失”和“UNKNOWN 后恢复方向漂离已验证走廊”。最终10/10 gate仍 FAIL，下一轮
   优先对这五条的第一个失效段做跨 EP 通用候选/恢复分析。
+
+## Rk-B 候选（未编号，尚未十 EP 回归）— 前进停滞早停 + 每目标步数预算 40（2026-09-11）
+
+- 触发问题：`outputs/e2e_eval/20260911_001436_e2e_opennav/` 中 34 个 `end_reason=max_steps` 的 hop
+  同时包含两类相反情形——约 15 个是选点方向正确、自由行走 3.5–4.4 m 后被 20 步预算截断；约 13 个
+  是起步即撞墙（≥6 次前进隐藏位移 <2 cm，整段只走 0–0.8 m）却把 20 步全部耗尽；另约 6 个是贴墙
+  斜擦微滑（每步 2–10 cm）。单纯加大预算会放大第二类浪费，单纯缩小预算会加重第一类误判。
+- 离线标定（evaluation-only，25 条带隐藏几何 EP、192 hop、2004 次 `move_forward`，脚本
+  `scripts/analyze_forward_stall_calibration.py`）：已有的逐帧灰度差 `rgb_motion_score` 在隐藏位移
+  <2 cm 时中位数为 0（确定性渲染，帧完全相同）、微滑 6–14 mm 时稳定在 3–8；自由前进（≥20 cm）
+  5 分位 12.3、中位 24.1。规则「连续 K 次前进 score < T（转向不重置）」在 T=8/K=3 触发 16 次、
+  0 次误停（误停定义：该 hop 后来正常到达且触发点之后仍走 >0.3 m），可省 153 步；T=10/K=3 触发
+  18 次但有 1 次误停；T=5/K=2 0 误停但漏掉 score≈8 的微滑段。到达 hop 的步数中位 10、90 分位
+  15.3、最大 18，加大预算不改变正常到达。
+- 改动（仅走路层，RGB-only 合规：只读相邻 RGB 差分与自己的 action history，`project_rulle.md` §0
+  明确允许「根据相邻 RGB 的变化计算纯视觉运动量」，不读 collision）：
+  `TRACKING_CLUSTER_PROFILES["rgb_only_dense_stop_v1"]` 新增 `stall_motion_threshold=8.0`、
+  `stall_forward_frames=3`（0 = 关闭）；`_execute_rgb_only` 维护 `stall_forward_streak`，达到阈值即以
+  非到达 `end_reason="rgb_forward_stall"` 结束 hop（记录 `terminal_stall_forward_streak`、
+  `terminal_stall_motion_scores`，每步 action_history 带 `stall_forward_streak`），外层策略沿用既有
+  「回溯到上个已验证节点 + block 该方向 + 重新选点」分支，执行器内不做转向脱困。
+  `evaluate_point_navigation.py` 与 `habitat_point_navigation.py` 的 `--max-steps-per-target` 默认值
+  统一为 40（原 20 / 32 不一致）。
+- 已实际运行并通过：`tests/test_rgb_only_executor_stall.py`（6 例：帧不变 K 步即停、帧有变化跑满
+  预算得 `max_steps`、先走后停、K=0 关闭、转向不重置）、`tests/test_rgb_only_instruction_sequence.py`
+  新增停滞 hop 走回溯/拉黑分支用例；全量 363 个单元/契约测试通过；EP0 heuristic 后端单 hop GPU 冒烟
+  正常到达（12 步，streak 全 0，`config.max_steps_per_target=40`）。
+- 尚未验证：固定十 EP 同轮回归（`bash run_e2e_eval.sh 0,3,6,9,18,27,45,126,204,219 --workers 2`），
+  按 §16 在此之前本候选不得视为冻结配置。已知不覆盖：贴墙斜擦微滑与自由前进的 score 重叠，本规则
+  捕获不到（停簇像素位移同样无法区分：微滑中位 4 px vs 自由 6 px），留作后续时序规则。

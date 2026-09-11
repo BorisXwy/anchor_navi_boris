@@ -67,6 +67,8 @@
 
 **怎么修**：先把 20 对齐到 32（配置对齐，但规则要求当独立候选做十 EP 回归）；再看 GNM 密集停止簇的到达阈值。
 
+**进展（2026-09-11 追加）**：两处默认值已统一为 40，并在走路层加入 RGB-only 前进停滞早停（`stall_motion_threshold=8.0`、`stall_forward_frames=3`，`end_reason=rgb_forward_stall`），避免加大预算后撞墙 hop 把步数耗尽；离线标定见 `scripts/analyze_forward_stall_calibration.py` 与 `docs/curriculum_10ep_round_log.md` 末条。单元测试与 EP0 冒烟已通过，十 EP 回归尚未执行。
+
 ## 第 5 位：长指令、远距离基本没戏（结构性）
 
 **现象**：6 条成功（id 11、308、531、670、698、810）起点距目标都在 5–9 m、2–5 句；**没有一条起点 >10 m 的成功**；7–8 句的指令全部失败。

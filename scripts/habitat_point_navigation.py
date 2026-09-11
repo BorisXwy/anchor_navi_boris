@@ -720,7 +720,7 @@ def _run_habitat_episode(argv=None):
         help="deterministic samples for full reachable-island coverage")
     p.add_argument("--max-frontier-transit-attempts", type=int, default=3,
                    help="blacklist a remembered frontier after this many transit segments fail to visit it")
-    p.add_argument("--max-steps-per-target", type=int, default=32)
+    p.add_argument("--max-steps-per-target", type=int, default=40)
     p.add_argument(
         "--tracking-cluster-profile",
         choices=sorted(TRACKING_CLUSTER_PROFILES),

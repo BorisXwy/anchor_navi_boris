@@ -498,6 +498,15 @@ TRACKING_CLUSTER_PROFILES["rgb_only_dense_stop_v1"] = {
     "forward_commands_after_turn": 1,
     "turn_deadband_deg": 7.0,
     "navigation_loss_grace_frames": 3,
+    # Forward-stall early stop.  A blocked agent (sliding against a wall)
+    # renders near-identical consecutive frames, so repeated forward commands
+    # with a tiny grayscale change are treated as no physical progress and the
+    # hop ends as a non-arrival instead of burning the whole step budget.
+    # Calibrated on hidden geometry of 25 OpenNav episodes (2004 forward
+    # commands): displacement < 2 cm gives scores 0-8, free motion >= 20 cm
+    # has a 5th percentile of 12.3; T=8/K=3 fired 16 times with no false stop.
+    "stall_motion_threshold": 8.0,
+    "stall_forward_frames": 3,
 }
 
 
@@ -1031,6 +1040,12 @@ class PointNavigationExecutor:
         forward_commands = 0
         forward_since_turn = 0
         rgb_motion_frames = 0
+        stall_forward_streak = 0
+        stall_motion_scores = []
+        stall_motion_threshold = float(
+            self.cluster_config.get("stall_motion_threshold", 0.0))
+        stall_forward_frames = int(
+            self.cluster_config.get("stall_forward_frames", 0))
         last_navigation_tracks = None
         last_navigation_visible = None
         record = {
@@ -1068,6 +1083,8 @@ class PointNavigationExecutor:
             "arrival_rule": (
                 "dense RGB stop-cluster loss + forward action history + "
                 "RGB ego-motion confirmation"),
+            "stall_motion_threshold": stall_motion_threshold,
+            "stall_forward_frames": stall_forward_frames,
             "steps": [], "end_reason": None, "arrival_signal": None,
             "terminal_navigation_visible_fraction": None,
             "terminal_stop_visible_fraction": None,
@@ -1212,10 +1229,21 @@ class PointNavigationExecutor:
                 if motion_score >= float(
                         self.cluster_config["rgb_motion_threshold"]):
                     rgb_motion_frames += 1
+                # Turns are deliberately left out: a turn that frees the agent
+                # shows up as a high-motion forward on the next step anyway.
+                if motion_score < stall_motion_threshold:
+                    stall_forward_streak += 1
+                    stall_motion_scores.append(motion_score)
+                else:
+                    stall_forward_streak = 0
+                    stall_motion_scores = []
             else:
                 forward_since_turn = 0
                 action_heading_rad = _wrap_angle(
                     action_heading_rad + math.radians(commanded_turn_deg))
+            forward_stalled = bool(
+                stall_forward_frames > 0 and
+                stall_forward_streak >= stall_forward_frames)
 
             action_record = {
                 "step": local_step,
@@ -1225,6 +1253,7 @@ class PointNavigationExecutor:
                 "rgb_motion_score": motion_score,
                 "rgb_motion_threshold": float(
                     self.cluster_config["rgb_motion_threshold"]),
+                "stall_forward_streak": stall_forward_streak,
                 "policy_input_contract": "rgb_only_v1",
             }
             action_history.append(action_record)
@@ -1279,11 +1308,30 @@ class PointNavigationExecutor:
                 "action": action,
                 "commanded_turn_deg": commanded_turn_deg,
                 "rgb_motion_score": motion_score,
+                "stall_forward_streak": stall_forward_streak,
                 "policy_inference_sec": inference_seconds,
             })
             global_step += 1
             rgb = next_rgb
             context.append(Image.fromarray(rgb))
+            if forward_stalled:
+                record["end_reason"] = "rgb_forward_stall"
+                record["terminal_stall_forward_streak"] = stall_forward_streak
+                record["terminal_stall_motion_scores"] = list(
+                    stall_motion_scores)
+                record["terminal_navigation_visible_fraction"] = (
+                    navigation_fraction)
+                record["terminal_stop_visible_fraction"] = stop_fraction
+                terminal_frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                cv2.putText(
+                    terminal_frame,
+                    f"RGB STALL {stall_forward_streak} fwd < {stall_motion_threshold:.0f}",
+                    (8, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (0, 0, 255), 2)
+                self._append_video(
+                    terminal_frame, request, None, action_heading_rad,
+                    "rgb_only_forward_stall")
+                break
             tracks, visible = self.tracker.step(rgb)
             if separate_arrival_tracker:
                 stop_tracks, stop_visible = self.arrival_tracker.step(rgb)

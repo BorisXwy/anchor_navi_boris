@@ -334,7 +334,7 @@ def main():
     parser.add_argument(
         "--decomposition-artifact", type=Path, default=None,
         help="frozen per-episode decomposition or ten-EP benchmark manifest")
-    parser.add_argument("--max-steps-per-target", type=int, default=20)
+    parser.add_argument("--max-steps-per-target", type=int, default=40)
     parser.add_argument("--max-exploration-targets", type=int, default=120)
     parser.add_argument("--full-space-coverage-threshold", type=float,
                         default=0.90)
