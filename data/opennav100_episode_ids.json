@@ -4,7 +4,7 @@
   "source_manifest": "/workspace/Navi-Agent/VLN-CE-master/VLN-CE-master/data/datasets/opennav_pilot/opennav100_manifest.json",
   "source_sha256": "850b03557e884daa7a92b8869ac73ed92b5c5a65ee4de007bd737b59d776ad5a",
   "n_episodes": 100,
-  "note": "Episode ids only. Start position/rotation must be read from the official R2R VLN-CE v1-3 val_unseen.json.gz; the OpenNav release overrides start_rotation with a wrong conversion (yaw = 180 deg - 2h instead of -h). Never load OpenNav_R2R-CE_100_bertidx*.",
+  "note": "Episode ids only. Start position/rotation must be read from the official R2R VLN-CE v1-3 val_unseen.json.gz; the OpenNav release overrides start_rotation with a wrong conversion (yaw = 180 deg - 2h instead of -h). Never load OpenNav_R2R-CE_100_bertidx*. The e2e launcher defaults to data/datasets/opennav100_start_aligned/, a copy of these 100 official episodes whose start_rotation is aligned to the instruction's opening turn and the GT path (project_rulle.md section 17); pass --start-pose-source official for the published rotations.",
   "episode_ids": [
     "7",
     "11",

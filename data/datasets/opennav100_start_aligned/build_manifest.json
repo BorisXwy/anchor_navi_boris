@@ -1,0 +1,51 @@
+{
+  "rule_version": "opennav100_start_aligned_v1",
+  "generated_utc": "2026-09-11T14:37:34.341385+00:00",
+  "git_revision": "d01a50f9f4c470d9bb0f09d9aae18673be21cdf2",
+  "source_val_unseen": "/workspace/Navi-Agent/VLN-CE-master/VLN-CE-master/data/datasets/R2R_VLNCE_v1-3_preprocessed/R2R_VLNCE_v1-3_preprocessed/val_unseen/val_unseen.json.gz",
+  "source_val_unseen_sha256": "1767a407e2c8a011fbb7abece76cd64c5b39ff9fa0e9e340ebdce5a490d167c3",
+  "source_ids_file": "/workspace/anchor_navi_boris/data/opennav100_episode_ids.json",
+  "source_ids_sha256": "ce30b703fd3ee53ffcbbf60a4629264adf0013284d673aaa172a2d792fe56d2e",
+  "n_episodes": 100,
+  "rule": {
+    "aligned_yaw": "gt_initial_bearing - opening_turn_offset",
+    "opening_turn_offset_deg": {
+      "TURN_LEFT": 90.0,
+      "TURN_RIGHT": -90.0,
+      "TURN_AROUND": 180.0
+    },
+    "other_forms_offset_deg": 0.0,
+    "undefined_opening_forms_keep_official": [
+      "OTHER",
+      "TURN_TO_LANDMARK"
+    ],
+    "gt_bearing_min_distance_m": 1.0,
+    "opening_form_classifier": "instruction_taxonomy.decompose_by_definition[0].form",
+    "quaternion_order": "[x, y, z, w], rotation about +y, yaw = 2*atan2(y, w)"
+  },
+  "opening_form_counts": {
+    "ADVANCE_STRAIGHT": 9,
+    "APPROACH_LANDMARK": 6,
+    "BETWEEN_OBJECTS": 2,
+    "CROSS_SPACE": 2,
+    "ENTER_REGION": 5,
+    "EXIT_REGION": 28,
+    "FOLLOW_PATH_BOUNDARY": 4,
+    "OTHER": 3,
+    "PASS_LANDMARK": 7,
+    "TRAVERSE_PORTAL_REGION": 8,
+    "TURN_AROUND": 6,
+    "TURN_LEFT": 6,
+    "TURN_RIGHT": 10,
+    "TURN_TO_LANDMARK": 1,
+    "VERTICAL_DOWN": 1,
+    "VERTICAL_UP": 2
+  },
+  "status_counts": {
+    "rewritten": 96,
+    "kept_official": 4
+  },
+  "dataset_file": "val_unseen_opennav100ids_start_aligned.json.gz",
+  "dataset_sha256": "cb20c192f9fafd2ede9af51db6d8f4696c7e7fb06ebbe3c5b5b60f6583a6cf66",
+  "audit_jsonl_sha256": "678ce94fa1b9ccc39aac23f9188970f50d9bd9a0f8499815dc79754e485f8c58"
+}
