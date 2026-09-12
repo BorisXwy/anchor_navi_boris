@@ -372,6 +372,12 @@ def main():
         "--instruction-completion-prompt-version",
         default="v13_structured_node_edge_binary")
     parser.add_argument(
+        "--decomposition-prompt-version",
+        default="v2_relation_only_completion")
+    parser.add_argument(
+        "--rgb-only-completion-prompt-version",
+        default="v2_form_aware_stop_relation")
+    parser.add_argument(
         "--tracking-cluster-profile", default="rgb_only_dense_stop_v1")
     parser.add_argument("--deepseek-env", type=Path, default=ROOT / ".env.deepseek")
     parser.add_argument("--deepseek-base-url", default=None)
@@ -430,6 +436,9 @@ def main():
             args.point_selection_prompt_version),
         "instruction_completion_prompt_version": (
             args.instruction_completion_prompt_version),
+        "decomposition_prompt_version": args.decomposition_prompt_version,
+        "rgb_only_completion_prompt_version": (
+            args.rgb_only_completion_prompt_version),
         "tracking_cluster_profile": args.tracking_cluster_profile,
         "policy_input_contract": "rgb_only_v1",
         "policy_observations": ["rgb", "commanded_action_history"],
@@ -494,6 +503,10 @@ def main():
                 args.point_selection_prompt_version,
                 "--instruction-completion-prompt-version",
                 args.instruction_completion_prompt_version,
+                "--decomposition-prompt-version",
+                args.decomposition_prompt_version,
+                "--rgb-only-completion-prompt-version",
+                args.rgb_only_completion_prompt_version,
                 "--tracking-cluster-profile", args.tracking_cluster_profile,
                 "--seed", str(args.seed),
                 "--sequence-max-exploration-hops",
@@ -816,6 +829,9 @@ def main():
             args.point_selection_prompt_version),
         "instruction_completion_prompt_version": (
             args.instruction_completion_prompt_version),
+        "decomposition_prompt_version": args.decomposition_prompt_version,
+        "rgb_only_completion_prompt_version": (
+            args.rgb_only_completion_prompt_version),
         "tracking_cluster_profile": args.tracking_cluster_profile,
         "seed": args.seed,
         "vlm_timeout": args.vlm_timeout,

@@ -9,6 +9,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
+from analyze_judge_round import parse_judge_prompt  # noqa: E402
 from instruction_decomposer import SubInstruction  # noqa: E402
 from vlm_harness import HeuristicBackend, NavigationVLMHarness  # noqa: E402
 
@@ -27,10 +28,13 @@ class RGBOnlyEdgeJudgeTest(unittest.TestCase):
     def views(count, shade):
         return [np.full((48, 64, 3), shade, np.uint8) for _ in range(count)]
 
-    def judge(self, keyframe_count, views=8, edge_action_history=None):
+    def judge(self, keyframe_count, views=8, edge_action_history=None,
+              prompt_version="v1_baseline", sub_instruction=None):
         backend = RecordingHeuristicBackend()
-        harness = NavigationVLMHarness(backend, retries=0)
-        sub_instruction = SubInstruction.from_mapping({
+        harness = NavigationVLMHarness(
+            backend, retries=0,
+            rgb_only_completion_prompt_version=prompt_version)
+        sub_instruction = sub_instruction or SubInstruction.from_mapping({
             "sub_instruction_id": 0,
             "navigation_instruction": "walk into the kitchen",
             "form": "ENTER_REGION",
@@ -89,6 +93,94 @@ class RGBOnlyEdgeJudgeTest(unittest.TestCase):
     def test_six_view_panoramas_are_accepted_with_five_keyframes(self):
         _, result = self.judge(5, views=6)
         self.assertEqual(result["status"], "unknown")
+
+    @staticmethod
+    def stop_wait_stage(**overrides):
+        payload = {
+            "sub_instruction_id": 2,
+            "navigation_instruction": "Stop at refrigerator",
+            "landmark": "refrigerator",
+            "completion_cue": "camera is near the refrigerator and has stopped",
+            "semantic_spatial_target": "floor in front of the refrigerator",
+            "spatial_relation": "directly in front of the refrigerator",
+            "visual_arrival_evidence": "the refrigerator is prominently visible",
+            "forbidden_target": "the refrigerator surface",
+            "form": "STOP_WAIT",
+            "point_selection_strategy": {
+                "arrival": "relation and safe distance hold; then emit stop"},
+            "metadata": {"vlm_parent_raw_index": 1},
+        }
+        payload.update(overrides)
+        return SubInstruction.from_mapping(payload)
+
+    @staticmethod
+    def active_block(prompt):
+        return prompt.split("ACTIVE SUB-INSTRUCTION:")[1].split(
+            "FOLLOWING SUB-INSTRUCTION")[0]
+
+    def test_v1_prompt_keeps_full_sub_instruction_and_no_form_rules(self):
+        backend, _ = self.judge(5, sub_instruction=self.stop_wait_stage())
+        prompt = backend.calls[-1]["prompt"]
+        self.assertIn("blocked/stationary", prompt)
+        self.assertIn("then emit stop", self.active_block(prompt))
+        self.assertNotIn("MOTION-STATE RULE", prompt)
+        self.assertNotIn("STOP_WAIT RULE", prompt)
+
+    def test_v2_compacts_sub_instruction_and_adds_stop_wait_rule(self):
+        backend, _ = self.judge(
+            5, prompt_version="v2_form_aware_stop_relation",
+            sub_instruction=self.stop_wait_stage())
+        prompt = backend.calls[-1]["prompt"]
+        block = self.active_block(prompt)
+        for key in ("point_selection_strategy", "metadata", "source_clause"):
+            self.assertNotIn(key, block)
+        for key in ("completion_cue", "visual_arrival_evidence", "form",
+                    "spatial_relation", "definition"):
+            self.assertIn(f'"{key}"', block)
+        self.assertNotIn("stationary, ambiguous", prompt)
+        self.assertIn("MOTION-STATE RULE", prompt)
+        self.assertIn("STOP_WAIT RULE", prompt)
+        self.assertIn("only AFTER you return completed", prompt)
+        self.assertLess(prompt.index("STOP_WAIT RULE"),
+                        prompt.index("Image 0 is the previous panorama"))
+
+    def test_v2_stop_wait_rule_follows_the_form_not_the_wording(self):
+        backend, _ = self.judge(
+            5, prompt_version="v2_form_aware_stop_relation")
+        prompt = backend.calls[-1]["prompt"]
+        self.assertIn("MOTION-STATE RULE", prompt)
+        self.assertNotIn("STOP_WAIT RULE", prompt)
+        backend, _ = self.judge(
+            5, prompt_version="v2_form_aware_stop_relation",
+            sub_instruction=self.stop_wait_stage(
+                form="EXIT_REGION", secondary_forms=["STOP_WAIT"]))
+        self.assertIn("STOP_WAIT RULE", backend.calls[-1]["prompt"])
+
+    def test_both_versions_stay_parseable_by_round_analysis(self):
+        actions = [{"step": index, "action": "move_forward",
+                    "commanded_turn_deg": 0.0, "forward_commanded": True,
+                    "rgb_motion_score": 9.0} for index in range(3)]
+        for version in sorted(
+                NavigationVLMHarness.RGB_ONLY_COMPLETION_PROMPT_VERSIONS):
+            backend, _ = self.judge(
+                5, prompt_version=version, edge_action_history=actions,
+                sub_instruction=self.stop_wait_stage())
+            parsed = parse_judge_prompt(backend.calls[-1]["prompt"])
+            self.assertEqual(parsed["sub_instruction"]["form"], "STOP_WAIT",
+                             version)
+            self.assertEqual(parsed["sub_instruction"]["sub_instruction_id"], 2)
+            self.assertEqual(parsed["action_summary"]["forward_command_count"],
+                             3, version)
+            self.assertEqual(parsed["action_summary"]["control_steps"], 3)
+
+    def test_unknown_prompt_version_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "rgb-only-completion"):
+            NavigationVLMHarness(
+                HeuristicBackend(),
+                rgb_only_completion_prompt_version="v3_missing")
+        with self.assertRaisesRegex(ValueError, "rgb-only-completion"):
+            NavigationVLMHarness.render_rgb_only_completion_prompt(
+                "bogus", {}, {}, {}, {}, {})
 
 
 if __name__ == "__main__":

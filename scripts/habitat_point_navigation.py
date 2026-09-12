@@ -679,6 +679,19 @@ def _run_habitat_episode(argv=None):
         default="v13_structured_node_edge_binary",
         help=("versioned edge-completion harness; runtime output is always "
               "completed/unknown, while v9/v10 may use latent progress evidence"))
+    p.add_argument(
+        "--decomposition-prompt-version",
+        choices=sorted(NavigationVLMHarness.DECOMPOSITION_PROMPT_VERSIONS),
+        default="v2_relation_only_completion",
+        help=("versioned instruction-decomposition prompt; v1_baseline "
+              "remains available for rollback"))
+    p.add_argument(
+        "--rgb-only-completion-prompt-version",
+        choices=sorted(
+            NavigationVLMHarness.RGB_ONLY_COMPLETION_PROMPT_VERSIONS),
+        default="v2_form_aware_stop_relation",
+        help=("versioned RGB-only edge-completion judge prompt used under "
+              "rgb-only-v1; v1_baseline remains available for rollback"))
     p.add_argument("--ollama-host", default="http://127.0.0.1:11434")
     p.add_argument("--deepseek-env", type=Path, default=ROOT / ".env.deepseek",
                    help="local file containing DEEPSEEK_API_KEY")
@@ -1029,7 +1042,10 @@ def _run_habitat_episode(argv=None):
             point_selection_prompt_version=(
                 args.point_selection_prompt_version),
             instruction_completion_prompt_version=(
-                args.instruction_completion_prompt_version))
+                args.instruction_completion_prompt_version),
+            decomposition_prompt_version=args.decomposition_prompt_version,
+            rgb_only_completion_prompt_version=(
+                args.rgb_only_completion_prompt_version))
         instruction_decomposer = InstructionDecomposer(vlm_harness)
         if args.decomposition_artifact is not None:
             decomposition_path = Path(args.decomposition_artifact)
@@ -1119,6 +1135,12 @@ def _run_habitat_episode(argv=None):
     stage_count = len(stages)
     decomposition_record = {
         "instruction": instruction,
+        "decomposition_prompt_version": (
+            args.decomposition_prompt_version if args.mode == "semantic"
+            and args.decomposition_artifact is None else None),
+        "decomposition_artifact": (
+            str(args.decomposition_artifact)
+            if args.decomposition_artifact is not None else None),
         "all_sub_instructions": [item.to_dict()
                                  for item in all_sub_instructions],
         "selected_sub_instructions": [item.to_dict()
@@ -1964,7 +1986,13 @@ def _run_habitat_episode(argv=None):
         "instruction_completion_judge": {
             "class": "RGBOnlyNodeTransitionInstructionCompletionJudge",
             "outcomes": ["completed", "unknown"],
-            "prompt_version": args.instruction_completion_prompt_version,
+            "prompt_version": args.rgb_only_completion_prompt_version,
+            # The legacy flag never reaches the RGB-only prompt text; under
+            # rgb-only-v1 it only decides 6- vs 8-view node capture.
+            "view_capture_gate_flag": args.instruction_completion_prompt_version,
+            "eight_view_capture_active": bool(
+                args.instruction_completion_prompt_version in
+                NavigationVLMHarness.EIGHT_VIEW_COMPLETION_PROMPT_VERSIONS),
             "route_membership_output": False,
             "latent_progress_evidence": bool(
                 args.instruction_completion_prompt_version in {

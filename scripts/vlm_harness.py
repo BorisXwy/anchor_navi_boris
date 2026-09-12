@@ -27,6 +27,25 @@ from instruction_completion_evidence import (
 
 DEFAULT_OLLAMA_MODEL = "llama3.2-vision:latest"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash-vision-exp"
+# Completion cues written by the decomposer must be verifiable from a single
+# panorama.  The task-level STOP is only issued after the judge accepts a cue,
+# so a cue that requires the robot to be motionless, or the landmark to fill
+# the frame, can never be satisfied online.  Only ``completion_cue`` and
+# ``visual_arrival_evidence`` are checked: instruction text legitimately says
+# "stop"/"wait".
+MOTION_STATE_CUE_PATTERN = re.compile(
+    r"\b(stationary|motionless|halted|paused|"
+    r"(?:has|have|had|is|are) (?:now |already )?stopped|stops|"
+    r"standing still|stands? still|holds? still|remains? still|"
+    r"not moving|no longer moving|comes? to a (?:stop|halt)|"
+    r"(?:is|are) waiting)\b", re.IGNORECASE)
+EXTREME_PROXIMITY_CUE_PATTERN = re.compile(
+    r"\b((?:fills?|filling|occup(?:y|ies|ying)|covers?|covering|"
+    r"dominat(?:es?|ing)) (?:a (?:significant|large|major) "
+    r"(?:portion|part|fraction) of )?(?:most of )?the "
+    r"(?:forward |front |camera |entire |whole )?(?:view|frame|panorama)|"
+    r"close enough to touch|immediately adjacent|within arm'?s reach)\b",
+    re.IGNORECASE)
 # The cloud VLM is reached through the DMXAPI OpenAI-compatible relay.  The
 # historical OpenRouter variable names below are shared with Navi-Agent's
 # Final Method so one local_env.sh block configures both projects; the older
@@ -1670,6 +1689,21 @@ class NavigationVLMHarness:
         "v1_two_panorama_same_place",
     }
     DEFAULT_NODE_REVISIT_PROMPT_VERSION = "v1_two_panorama_same_place"
+    DECOMPOSITION_PROMPT_VERSIONS = {
+        "v1_baseline",
+        # Completion cues must describe a verifiable spatial relation, never a
+        # robot motion state ("stationary", "has stopped") or extreme proximity
+        # ("fills the view"); the task-level STOP is only issued after the
+        # judge accepts the cue, so motion-state cues can never be satisfied.
+        "v2_relation_only_completion",
+    }
+    RGB_ONLY_COMPLETION_PROMPT_VERSIONS = {
+        "v1_baseline",
+        # Compact sub-instruction rendering plus a STOP_WAIT rule that judges
+        # only the landmark relation and ignores that the edge ends with a
+        # movement command.
+        "v2_form_aware_stop_relation",
+    }
 
     EIGHT_VIEW_FORM_RULES = {
         "PASS_LANDMARK": (
@@ -1775,10 +1809,26 @@ class NavigationVLMHarness:
 
     def __init__(self, backend, log_path=None, retries=2,
                  point_selection_prompt_version="v3_orientation_soft_semantic",
-                 instruction_completion_prompt_version="v1_edge_evidence"):
+                 instruction_completion_prompt_version="v1_edge_evidence",
+                 decomposition_prompt_version="v1_baseline",
+                 rgb_only_completion_prompt_version="v1_baseline"):
         self.backend = backend
         self.log_path = Path(log_path) if log_path is not None else None
         self.retries = retries
+        if decomposition_prompt_version not in self.DECOMPOSITION_PROMPT_VERSIONS:
+            raise ValueError(
+                "unknown decomposition prompt version "
+                f"{decomposition_prompt_version!r}; expected one of "
+                f"{sorted(self.DECOMPOSITION_PROMPT_VERSIONS)}")
+        self.decomposition_prompt_version = str(decomposition_prompt_version)
+        if (rgb_only_completion_prompt_version
+                not in self.RGB_ONLY_COMPLETION_PROMPT_VERSIONS):
+            raise ValueError(
+                "unknown rgb-only-completion prompt version "
+                f"{rgb_only_completion_prompt_version!r}; expected one of "
+                f"{sorted(self.RGB_ONLY_COMPLETION_PROMPT_VERSIONS)}")
+        self.rgb_only_completion_prompt_version = str(
+            rgb_only_completion_prompt_version)
         if point_selection_prompt_version not in self.POINT_SELECTION_PROMPT_VERSIONS:
             raise ValueError(
                 "unknown point-selection prompt version "
@@ -2022,8 +2072,38 @@ class NavigationVLMHarness:
             attempts_path.write_text(
                 json.dumps(self.attempts, indent=2) + "\n")
 
-    def decompose_instruction(self, instruction):
-        prompt = f"""STAGE_DECOMPOSITION
+    DECOMPOSITION_COMPLETION_WORDING_RULE = """
+Completion wording rule (applies to every stage's completion_cue and
+visual_arrival_evidence; most important for a final "stop at X" / "wait at X"
+stage): a stage endpoint is a STATE OF THE WORLD that one still panorama can
+verify (a spatial relation between the camera and a named landmark or region),
+never a STATE OF THE ROBOT'S MOTION. The judge that reads these fields only
+sees RGB images plus its own past turn/forward commands; the task-level STOP is
+issued only AFTER it accepts the cue, so the robot is necessarily still
+commanded forward at judgment time. Therefore:
+- Never describe completion by motion or stillness. Do not write "stationary",
+  "has stopped", "stops", "standing still", "not moving", "motionless",
+  "waiting", "come to a stop". Write the relation that must hold instead, e.g.
+  "the refrigerator is directly ahead at close range on the floor in front of it"
+  rather than "the camera has stopped near the refrigerator".
+- Never require extreme proximity that a single panorama cannot verify without
+  colliding. Do not write "fills the view", "fills a significant portion of the
+  forward view", "close enough to touch", "immediately adjacent", "within
+  arm's reach". Prefer "within a safe stopping offset of roughly one to two
+  body lengths of X, on the instructed side".
+- Name the landmark and the relation explicitly (near / beside / in front of /
+  just outside the doorway / at the corner of / on the left) so a frame can be
+  compared against it with no motion information.
+"""
+
+    @classmethod
+    def render_decomposition_prompt(cls, version, instruction):
+        if version not in cls.DECOMPOSITION_PROMPT_VERSIONS:
+            raise ValueError(
+                f"unknown decomposition prompt version {version!r}")
+        wording_rule = (cls.DECOMPOSITION_COMPLETION_WORDING_RULE
+                        if version == "v2_relation_only_completion" else "")
+        return f"""STAGE_DECOMPOSITION
 You are the instruction planner for an R2R indoor navigation agent. Split the
 instruction into ordered, visually grounded stages. Every stage MUST terminate
 at a semantic 3D spatial region that can be represented by a walkable floor
@@ -2038,7 +2118,7 @@ Grounding rules:
   opening after the turn; never target a wall merely to cause rotation.
 - "stop near X" targets free floor near X at a safe offset, not pixels on X.
 - "walk straight" targets distant visible floor along the corridor/open space.
-
+{wording_rule}
 For every stage specify the reference landmark, precise semantic spatial target,
 its spatial relation, visual evidence that the camera has arrived, and forbidden
 regions. Preserve turns, motion, landmarks and stopping conditions. Do not
@@ -2047,7 +2127,31 @@ invent objects not implied by the instruction or generic targets like
 R2R instruction: {instruction}
 Return only the requested JSON."""
 
+    @staticmethod
+    def completion_wording_violations(stage):
+        """Return ``(field, matched_text)`` pairs whose cue wording describes a
+        motion state or extreme proximity instead of a spatial relation."""
+        violations = []
+        for field in ("completion_cue", "visual_arrival_evidence"):
+            text = str(stage.get(field, ""))
+            for pattern in (MOTION_STATE_CUE_PATTERN,
+                            EXTREME_PROXIMITY_CUE_PATTERN):
+                match = pattern.search(text)
+                if match:
+                    violations.append((field, match.group(0)))
+                    break
+        return violations
+
+    def decompose_instruction(self, instruction):
+        prompt = self.render_decomposition_prompt(
+            self.decomposition_prompt_version, instruction)
+        check_wording = (
+            self.decomposition_prompt_version == "v2_relation_only_completion")
+        attempt_counter = {"value": 0}
+
         def validate(result):
+            attempt_counter["value"] += 1
+            last_attempt = attempt_counter["value"] > self.retries
             stages = result["stages"]
             if not isinstance(stages, list) or not stages:
                 raise ValueError("stages must be a non-empty list")
@@ -2069,6 +2173,33 @@ Return only the requested JSON."""
                         "semantic_spatial_target", "spatial_relation",
                         "visual_arrival_evidence", "forbidden_target")):
                     raise ValueError("each stage needs a non-empty semantic spatial grounding")
+                if not check_wording:
+                    continue
+                violations = self.completion_wording_violations(cleaned[-1])
+                if not violations:
+                    continue
+                if not last_attempt:
+                    field, matched = violations[0]
+                    raise ValueError(
+                        f"stage {index} {field} describes a motion state or "
+                        f"extreme proximity ({matched!r}) instead of a spatial "
+                        f"relation: {cleaned[-1][field]!r}; rewrite it as the "
+                        "landmark relation that must be visible")
+                # The retries are exhausted; a wording problem must not end the
+                # episode, so fall back to a relation-only template built from
+                # this stage's own landmark and relation.
+                repaired = {}
+                for field, matched in violations:
+                    repaired[field] = cleaned[-1][field]
+                    cleaned[-1][field] = (
+                        f"{cleaned[-1]['landmark'] or 'the landmark'} is visible "
+                        f"at the stated relation ({cleaned[-1]['spatial_relation']}) "
+                        "within a safe stopping offset")
+                cleaned[-1]["completion_wording_repair"] = {
+                    "fields": sorted(repaired),
+                    "matched": [matched for _, matched in violations],
+                    "original": repaired,
+                }
             return cleaned
 
         return self._call("decompose_instruction", prompt, [], self.STAGE_SCHEMA, validate)
@@ -7646,6 +7777,105 @@ change is insufficient. Return JSON only."""
                     for item in value]
         return value
 
+    RGB_ONLY_COMPLETION_COMPACT_KEYS = (
+        "sub_instruction_id", "navigation_instruction", "landmark", "form",
+        "secondary_forms", "definition", "semantic_spatial_target",
+        "spatial_relation", "completion_cue", "visual_arrival_evidence",
+        "forbidden_target",
+    )
+    RGB_ONLY_COMPLETION_MOTION_STATE_RULE = """
+MOTION-STATE RULE (all forms): the task-level STOP is issued by the outer
+controller only AFTER you return completed, so every edge necessarily ends
+with a movement command and non-zero rgb_motion_score. That the history "ends
+with move_forward" or that the camera "is still moving / not stationary" is a
+structural property of the system and is never evidence against completion.
+"""
+    RGB_ONLY_COMPLETION_STOP_WAIT_RULE = """
+STOP_WAIT RULE (this stage is a stop/wait stage): judge ONLY whether the
+CURRENT panorama shows the SAME landmark instance named in the sub-instruction
+at the stated spatial relation (near / beside / in front of / just outside the
+doorway / at the corner of / on the instructed side) at a plausible stopping
+range of roughly one to two body lengths. If completion_cue or
+visual_arrival_evidence mentions stopping, waiting or being stationary, treat
+that part as satisfied by definition and evaluate the remaining spatial
+relation only. Do not require the landmark to fill the frame or be close
+enough to touch; do not require the camera to look motionless across
+keyframes. Return completed when the relation holds. Return unknown when the
+named landmark is not identifiable at close-to-medium range in the current
+panorama, when only a similar object of the same class or a distant glimpse is
+visible, when the relation is reached only through a doorway/opening rather
+than at the camera's position, or when the same landmark moved from a
+front/side sector at the previous node into a rear sector while forward
+translation continued (the robot passed it instead of stopping at it).
+"""
+
+    @classmethod
+    def render_rgb_only_completion_prompt(
+            cls, version, item, following, action_summary,
+            previous_semantics, current_semantics):
+        """Pure prompt renderer shared by the online judge and offline replay.
+
+        The ``ACTIVE SUB-INSTRUCTION:`` / ``RGB-only commanded action
+        history:`` markers and their JSON keys are parsed back by
+        ``analyze_judge_round.parse_judge_prompt``; keep them in every version.
+        """
+        if version not in cls.RGB_ONLY_COMPLETION_PROMPT_VERSIONS:
+            raise ValueError(
+                f"unknown rgb-only-completion prompt version {version!r}")
+        if version == "v1_baseline":
+            active_block = json.dumps(item, ensure_ascii=False, indent=2)
+            following_block = json.dumps(
+                following, ensure_ascii=False, indent=2)
+            unknown_cases = ("still on the way, wrong\ndirection, "
+                             "blocked/stationary, ambiguous identity, or "
+                             "insufficient evidence")
+            form_rules = ""
+        else:
+            def compact(stage):
+                return {key: stage.get(key)
+                        for key in cls.RGB_ONLY_COMPLETION_COMPACT_KEYS
+                        if key in stage}
+            active_block = json.dumps(
+                compact(item), ensure_ascii=False, indent=2)
+            following_block = json.dumps(
+                compact(following), ensure_ascii=False, indent=2)
+            unknown_cases = ("still on the way, wrong\ndirection, obstructed "
+                             "(forward commands with no visible scene "
+                             "change),\nambiguous identity, or insufficient "
+                             "landmark evidence")
+            forms = {str(item.get("form", "")).upper()}
+            forms.update(str(name).upper()
+                         for name in item.get("secondary_forms") or [])
+            form_rules = cls.RGB_ONLY_COMPLETION_MOTION_STATE_RULE
+            if "STOP_WAIT" in forms:
+                form_rules += cls.RGB_ONLY_COMPLETION_STOP_WAIT_RULE
+        return f"""You are the RGB-only edge completion judge for an R2R robot.
+
+Decide whether the REAL observed transition from the previous node, through
+the chronological RGB keyframes, to the current node COMPLETED the active
+sub-instruction.  The alternative UNKNOWN includes {unknown_cases}.
+
+ACTIVE SUB-INSTRUCTION:
+{active_block}
+
+FOLLOWING SUB-INSTRUCTION (context only; do not complete it early):
+{following_block}
+
+RGB-only commanded action history:
+{json.dumps(action_summary, ensure_ascii=False, indent=2)}
+
+RGB detector evidence at PREVIOUS node:
+{json.dumps(previous_semantics, ensure_ascii=False, indent=2)}
+
+RGB detector evidence at CURRENT node:
+{json.dumps(current_semantics, ensure_ascii=False, indent=2)}
+{form_rules}
+Image 0 is the previous panorama, image 1 is the chronological edge
+storyboard, and image 2 is the current panorama.  Use visible semantic and
+temporal change.  Do not infer metric distance, elevation, collision, global
+heading, pose or map structure.  Seeing a landmark without reaching the full
+semantic spatial relation is UNKNOWN. Return JSON only."""
+
     def judge_edge_instruction_completion_rgb_only(
             self, sub_instruction, following_sub_instruction,
             previous_node_id, current_node_id,
@@ -7702,33 +7932,9 @@ change is insufficient. Return JSON only."""
         previous_sheet = panorama_sheet(previous_views)
         current_sheet = panorama_sheet(current_views)
         keyframe_sheet = self._keyframe_storyboard(edge_keyframes)
-        prompt = f"""You are the RGB-only edge completion judge for an R2R robot.
-
-Decide whether the REAL observed transition from the previous node, through
-the chronological RGB keyframes, to the current node COMPLETED the active
-sub-instruction.  The alternative UNKNOWN includes still on the way, wrong
-direction, blocked/stationary, ambiguous identity, or insufficient evidence.
-
-ACTIVE SUB-INSTRUCTION:
-{json.dumps(item, ensure_ascii=False, indent=2)}
-
-FOLLOWING SUB-INSTRUCTION (context only; do not complete it early):
-{json.dumps(following, ensure_ascii=False, indent=2)}
-
-RGB-only commanded action history:
-{json.dumps(action_summary, ensure_ascii=False, indent=2)}
-
-RGB detector evidence at PREVIOUS node:
-{json.dumps(previous_semantics, ensure_ascii=False, indent=2)}
-
-RGB detector evidence at CURRENT node:
-{json.dumps(current_semantics, ensure_ascii=False, indent=2)}
-
-Image 0 is the previous panorama, image 1 is the chronological edge
-storyboard, and image 2 is the current panorama.  Use visible semantic and
-temporal change.  Do not infer metric distance, elevation, collision, global
-heading, pose or map structure.  Seeing a landmark without reaching the full
-semantic spatial relation is UNKNOWN. Return JSON only."""
+        prompt = self.render_rgb_only_completion_prompt(
+            self.rgb_only_completion_prompt_version, item, following,
+            action_summary, previous_semantics, current_semantics)
         schema = {
             "type": "object",
             "properties": {

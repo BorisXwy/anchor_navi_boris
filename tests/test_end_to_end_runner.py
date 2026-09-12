@@ -170,6 +170,33 @@ class SelectionAndShardingTest(EndToEndRunnerFixture):
         self.assertNotIn("--targets", joined)
         self.assertTrue(joined.endswith("--views 6"))
 
+    def test_prompt_version_flags_reach_the_shard_command(self):
+        args = runner.build_parser().parse_args([
+            "7", "--decomposition-prompt-version",
+            "v2_relation_only_completion",
+            "--rgb-only-completion-prompt-version",
+            "v2_form_aware_stop_relation"])
+        options = runner.run_options_from_args(args)
+        self.assertEqual(options["decomposition_prompt_version"],
+                         "v2_relation_only_completion")
+        self.assertEqual(options["rgb_only_completion_prompt_version"],
+                         "v2_form_aware_stop_relation")
+        joined = " ".join(runner.shard_command(
+            Path("/x/evaluate_point_navigation.py"), [0], Path("/out/shard_0"),
+            "cuda:0", options, []))
+        self.assertIn(
+            "--decomposition-prompt-version v2_relation_only_completion", joined)
+        self.assertIn(
+            "--rgb-only-completion-prompt-version v2_form_aware_stop_relation",
+            joined)
+        # Unset flags stay absent so the per-episode CLI defaults apply.
+        defaults = runner.run_options_from_args(
+            runner.build_parser().parse_args(["7"]))
+        self.assertIsNone(defaults["decomposition_prompt_version"])
+        self.assertNotIn("--decomposition-prompt-version", " ".join(
+            runner.shard_command(
+                Path("/x/e.py"), [0], Path("/out"), "cuda:0", defaults, [])))
+
 
 class MergeTest(EndToEndRunnerFixture):
     def test_merge_keeps_unscored_and_not_run_episodes_explicit(self):

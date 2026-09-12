@@ -382,6 +382,8 @@ def build_parser():
                      default=None)
     run.add_argument("--point-selection-prompt-version", default=None)
     run.add_argument("--instruction-completion-prompt-version", default=None)
+    run.add_argument("--decomposition-prompt-version", default=None)
+    run.add_argument("--rgb-only-completion-prompt-version", default=None)
     run.add_argument("--seed", type=int, default=None)
 
     hidden = parser.add_argument_group("test hooks")
@@ -412,6 +414,9 @@ def run_options_from_args(args):
         "point_selection_prompt_version": args.point_selection_prompt_version,
         "instruction_completion_prompt_version": (
             args.instruction_completion_prompt_version),
+        "decomposition_prompt_version": args.decomposition_prompt_version,
+        "rgb_only_completion_prompt_version": (
+            args.rgb_only_completion_prompt_version),
         "seed": args.seed,
     }
 
