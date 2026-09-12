@@ -2195,3 +2195,42 @@
   action-reversal --run-tag m2m3`，新 flag 已是默认）与 100 条复跑；按 §16 未回归前本候选不得视为冻结配置。已知取舍：物理失败不再
   消耗上限后，死胡同节点可能改以 `max_sequence_exploration_hops` 结束而非 `all_candidate_directions_blocked_at_verified_node`；
   22.5° 锥会让同一错误方向的相邻照片被再次尝试（有意，由裁判封锁 5 次上限 + 30 跳预算兜底）。
+
+## 候选改动记录（未冻结）— M4：走路层门类到达滑行 + 停滞原地探测 + 倒放跳过停滞段（2026-09-12）
+
+- 依据：`docs/e2e_eval_reports/20260911_235744_opennav100_aligned_actrev/failure_analysis_95_plain_zh.md` 病根 F（到达中位差
+  0.92 m、短停比 0.71；前进停滞 53 次每次直接封锁；停滞触发的回溯落点中位误差 0.71 m vs 判定触发的 0.00 m）。commit `fd5665b`。
+- 改动（只在 `point_navigation_executor._execute_rgb_only` 与 `rgb_only_instruction_sequence.plan_action_reversal`，旧几何路径不动）：
+  (a) `PointNavigationRequest.instruction_form`（策略层传 `stage["form"]`）；form ∈ {EXIT_REGION, ENTER_REGION,
+  TRAVERSE_PORTAL_REGION, SELECT_PORTAL} 时到达后再发最多 `arrival_coast_forward_steps=3` 个前进，画面无变化即停并给该步打
+  `reversal_skip`；记录只进 `action_history`（`phase: arrival_coast`），不进 `record["steps"]`。(b) 停滞后先给没动的前进打
+  `reversal_skip="forward_stall"`，原地转 30°（2 个 turn，左/右交替）后继续伺服，最多 `stall_recovery_max_probes=2` 次，之后仍停滞才以
+  `rgb_forward_stall` 结束；探测转向在判定 `action_summary` 里单列 `stall_recovery_turn_command_count`，不计入左右转。(c)
+  `plan_action_reversal` 跳过带 `reversal_skip` 的记录，attempt 记 `skipped_no_motion_forward_count`。开关 `--arrival-coast-steps` /
+  `--stall-recovery-probes`（默认 None = profile 值；0 = 旧行为；三个入口转发，legacy profile 同名键不受影响）。
+- 已实际运行并通过：`python -m unittest discover -s tests -p 'test_*.py'` 426 个全部通过（新增 `tests/test_rgb_only_executor_recovery.py`
+  13 个：探测序列/标记/预算 0 复原、滑行触发/撞停/非门类不滑行/steps 不含滑行帧、倒放跳过、判定计数；`test_rgb_only_action_reversal_backtrack.py`
+  +1 停滞段 round-trip；旧 stall 测试改为显式 `stall_recovery_max_probes: 0`）。GPU 单 EP 诊断 `bash run_e2e_eval.sh 40,739 --workers 1
+  --run-tag m4_smoke`（`outputs/e2e_eval/20260912_115402_m4_smoke`，对齐数据集，3.5 分钟，0/2 成功，两条都仍以候选耗尽结束）：
+  三条规则都真实触发——门类句到达离所选点的隐藏距离 40：0.83→0.17 m、739：0.98→0.32、1.06→0.69 m（同 EP 与 5/100 轮对比）；
+  739 第 6 跳「停滞→左探→停滞→右探→停滞」后倒放跳过 9 条前进，VLM 确认回到原节点，落点误差 0.86 m——其中 4 条未标记的前进
+  RGB 变化 22 但真实位移只有 0.05 m（贴墙蹭行，停滞规则抓不到），倒放时每条走了 0.22 m；若不跳过 9 条则误差约 2.7 m。两次滑行在第 2 步撞停并正确打标。
+- 尚未验证：固定十 EP 同轮回归与 100 条复跑；按 §16 未回归前本候选不得视为冻结配置。已知取舍：关键帧仍均匀抽样，滑行/探测帧会稀释
+  真实运动帧；探测和滑行不消耗 `max_steps` 循环预算（额外动作硬上限 7，记在 `record["extra_physical_actions"]`）。
+
+## 候选改动记录（未冻结，holdout 未通过门槛）— M5：完成判定双向校准 v3/v3b（2026-09-12）
+
+- 依据：同上报告病根 D/E。协议、标签口径与预注册门槛：`docs/judge_calibration_m5_protocol_zh.md`（commit `18eebcb`，先于任何 v3 回放提交）；
+  标签 `data/judge_calibration_labels_20260911_235744_v1.json`（`scripts/build_judge_calibration_labels.py`，467 跳 → POS 134 / NEG 188 /
+  AMB 145，dev/holdout 各 48 EP）。代码 commit `8992b95`：`RGB_ONLY_COMPLETION_PROMPT_VERSIONS` 新增 `v3_sector_relation_evidence`、
+  `v3b_relation_rules_relaxed`（v2 + EVIDENCE PROTOCOL 四个 schema 字段与 `relation_satisfied=false` 确定性降级 + 不得作为 unknown
+  理由清单 + 按 form 渲染的 RELATION RULE + FALSE-POSITIVE GUARD；v3b 放宽 PASS_LANDMARK/TURN_*/STOP_WAIT/EXIT_REGION 四条规则），
+  schema/归一化抽成 `rgb_only_completion_schema` / `normalize_rgb_only_completion_result` 供在线与回放共用；
+  `replay_rgb_only_judge_round.py` 改为按 `(episode_id, target_index, sub_instruction_id)` 连标签、`--split/--labels-json/--workers`、
+  输出 P/R/F1（总体/按 form/按 EP）；独立复核器 `verify_round_stage_completions.py` 补 STOP_WAIT 关系口径（M1 记录里点名的遗留）。
+- 已实际运行：1168 次 DMXAPI 回放（`outputs/replay/m5_v2_all`、`m5_v3_dev`、`m5_v3b_dev`、`m5_v3b_holdout`）。holdout（POS 67 / NEG 99）：
+  v2 F1 0.700、FP 11、末句 NEG FP 4；v3b F1 0.715、FP 12、末句 NEG FP 7 → **三条门槛全部不满足，默认保持 v2**。dev 上 v3b F1 0.736
+  （v2 0.656）的增益全部来自 ② 组 4 个 in-circle STOP_WAIT episode（7、259、810、1106），holdout 的 STOP_WAIT 没有同样收益（362、321、
+  821、1301、586 仍 unknown）；假阳性全是「同类地标近处但不是那一个」，归 M6。**顺带发现：同一标签上当前默认 v2 的假阳性多于 v1**
+  （全 467：FP 18→28，末句 NEG FP 9→14），v2 是否保留为默认留给十 EP 回归决定。单元测试 431 个全部通过。
+- 尚未验证：任何版本的固定十 EP 同轮回归。
