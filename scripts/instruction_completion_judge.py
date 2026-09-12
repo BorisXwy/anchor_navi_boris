@@ -905,6 +905,9 @@ class RGBOnlyNodeTransitionInstructionCompletionJudge:
             validation_overrides={
                 "policy_input_contract": "rgb_only_v1",
                 "privileged_inputs_used": [],
+                "prompt_version": raw.get("prompt_version"),
+                "harness_overrides": raw.get("validation_overrides", []),
+                "relation_evidence": raw.get("relation_evidence", {}),
             },
             temporal_evidence=raw.get("temporal_evidence"),
             motion_evidence=raw.get("motion_evidence"),

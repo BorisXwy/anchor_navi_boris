@@ -491,6 +491,17 @@ continuous open floor lies forward, is positive completion evidence. Do not
 demand a separately recognizable surface called "behind". Seeing the region
 named by the next stage beyond that floor is context, not proof that its later
 action (such as following its landmarks or traversing it) has already occurred.
+
+For STOP_WAIT (stop / wait / stand at X), the online system issues the task
+STOP only after the judge accepts, so every edge ends with a movement command;
+"still moving", "not stationary" or a completion cue that mentions having
+stopped is never evidence against completion. Verify the spatial relation
+only: the SAME landmark instance at close range (about one to two body
+lengths) in any panorama sector for near / at / beside / next to, the front
+sector only for facing / in front of, a floor landmark counting as reached
+when it appears at the bottom edge of a view or under the camera. Reject a
+similar instance elsewhere, a distant glimpse, or the landmark far behind the
+camera after continued forward motion.
 """
     response = backend.generate_json(prompt, images, VERIFY_SCHEMA)
     for key in (

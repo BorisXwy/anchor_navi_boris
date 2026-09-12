@@ -1089,13 +1089,22 @@ class HeuristicBackend(VLMBackend):
         if "You are the RGB-only edge completion judge" in prompt:
             # A rule stub cannot see semantic change, so it never claims
             # completion; this keeps key-free smoke runs alive past arrival.
-            return {
+            answer = {
                 "status": "unknown",
                 "confidence": 0.5,
                 "reason": "heuristic rgb-only edge judge test backend",
                 "visual_evidence": "test backend does not inspect RGB",
                 "temporal_evidence": "no chronological evidence evaluated",
             }
+            properties = schema.get("properties", {})
+            if "relation_satisfied" in properties:
+                answer.update({
+                    "landmark_visible_current": False,
+                    "landmark_sector_current": "not_visible",
+                    "relation_satisfied": False,
+                    "transition_observed": False,
+                })
+            return answer
         if "EDGE_INSTRUCTION_COMPLETION_JUDGMENT" in prompt:
             if "endpoint_evidence" in schema.get("properties", {}):
                 return {
@@ -1704,7 +1713,22 @@ class NavigationVLMHarness:
         # only the landmark relation and ignores that the edge ends with a
         # movement command.
         "v2_form_aware_stop_relation",
+        # v2 plus an evidence protocol (landmark sector / relation fields the
+        # judge must fill before deciding), a list of reasons that never
+        # justify unknown, per-form relation rules and a false-positive guard
+        # against "landmark merely visible".  See
+        # docs/judge_calibration_m5_protocol_zh.md.
+        "v3_sector_relation_evidence",
+        # Same protocol/schema as v3; the PASS_LANDMARK, TURN_* and STOP_WAIT
+        # relation rules are relaxed after the dev replay showed they
+        # rejected on-route hops (extended landmarks still beside, turns
+        # without a corridor centred ahead, "near" with the landmark to the
+        # side or behind at close range).
+        "v3b_relation_rules_relaxed",
     }
+    RGB_ONLY_COMPLETION_EVIDENCE_VERSIONS = frozenset({
+        "v3_sector_relation_evidence", "v3b_relation_rules_relaxed",
+    })
 
     EIGHT_VIEW_FORM_RULES = {
         "PASS_LANDMARK": (
@@ -7824,6 +7848,305 @@ front/side sector at the previous node into a rear sector while forward
 translation continued (the robot passed it instead of stopping at it).
 """
 
+    # v3 additions.  All of them render into the same ``form_rules`` slot as
+    # the v2 rules (after the five JSON blocks), so the prompt parser in
+    # analyze_judge_round keeps working.
+    RGB_ONLY_COMPLETION_EVIDENCE_PROTOCOL = """
+EVIDENCE PROTOCOL (fill these JSON fields BEFORE choosing status):
+- landmark_visible_current: is the SPECIFIC landmark or region instance named
+  in the sub-instruction identifiable in the CURRENT panorama (image 2)?
+- landmark_sector_current: where it lies relative to the camera in the
+  current panorama: front / left / right / rear / not_visible.  Use
+  not_applicable only when the sub-instruction names no landmark or region.
+- relation_satisfied: does the camera POSITION in the current panorama
+  satisfy the spatial relation the sub-instruction demands (see the RELATION
+  RULE), as opposed to merely seeing the landmark somewhere?
+- transition_observed: do the chronological keyframes (image 1) show the
+  change from the previous relation to the current one (for example the
+  doorway approaching, then passing to the side or behind)?
+status may be completed only when relation_satisfied is true and
+(landmark_visible_current is true or the form names no landmark).  A
+landmark seen in front at medium range is NOT relation_satisfied unless the
+demanded relation is "ahead / in front of / facing".
+"""
+    RGB_ONLY_COMPLETION_INVALID_UNKNOWN_REASONS = """
+REASONS THAT NEVER JUSTIFY UNKNOWN: the history ends with move_forward or
+the camera is "still moving / not stationary"; metric distance cannot be
+measured or is "unknown"; the following sub-instruction has not started; the
+number of commands looks small; the landmark is only partly visible at a
+frame border while the relation is otherwise clear.  An unknown verdict must
+cite a contradiction that is VISIBLE in the images: the named landmark is
+absent or a different instance, it lies in the wrong sector for the demanded
+relation, the camera is still inside the region it should have left, the
+portal it should have crossed is still ahead, or the route it should have
+turned onto is not in front.
+"""
+    RGB_ONLY_COMPLETION_FALSE_POSITIVE_GUARD = """
+FALSE-POSITIVE GUARD: a landmark that is merely VISIBLE ahead at medium or
+far range does not satisfy beside / behind / inside / through / past
+relations; another object of the same class (a different door, chair, table,
+rug) does not satisfy the relation; a region seen through an opening has not
+been entered.  When FOLLOWING SUB-INSTRUCTION is empty this is the final
+stage and completed triggers the task-level STOP here, so demand the SAME
+landmark instance at the stated relation, never a similar one elsewhere.
+CONFIDENCE: 0.8-1.0 when the relation is visible in more than one view of the
+current panorama and the keyframes show the transition; 0.6-0.8 when it rests
+on a single view; 0.5 or lower when the evidence is borderline.  Use the same
+scale for unknown.
+"""
+    RGB_ONLY_COMPLETION_RELATION_RULES = {
+        "EXIT_REGION": (
+            "EXIT_REGION: completed only if the current panorama is taken "
+            "OUTSIDE the source region: its exit doorway/opening lies in a "
+            "side or rear sector and the front and side views show a "
+            "different region (hallway, other room).  Standing inside the "
+            "region with the doorway still ahead, however close, is unknown."),
+        "ENTER_REGION": (
+            "ENTER_REGION: completed only if the entry portal (door, doorway, "
+            "archway, gap) lies beside or behind the camera and the "
+            "destination region's interior fills the front and side views.  A "
+            "portal still ahead of the camera is unknown, however close."),
+        "TRAVERSE_PORTAL_REGION": (
+            "TRAVERSE_PORTAL_REGION: completed only if the portal or "
+            "intermediate region has been passed: it lies beside or behind "
+            "the camera and the space beyond it fills the front view.  A "
+            "portal still ahead is unknown."),
+        "SELECT_PORTAL": (
+            "SELECT_PORTAL: completed only if the SPECIFIED portal (by order "
+            "or side) lies beside or behind the camera and the space beyond "
+            "it fills the front view; a different portal, or the portal "
+            "still ahead, is unknown."),
+        "PASS_LANDMARK": (
+            "PASS_LANDMARK: completed only if the named landmark now lies in "
+            "a rear or rear-side sector of the current panorama after being "
+            "in front or beside earlier (previous panorama or keyframes).  A "
+            "landmark still ahead or squarely beside is unknown."),
+        "APPROACH_LANDMARK": (
+            "APPROACH_LANDMARK: completed when the named landmark is in the "
+            "front sector at close range (one or two body lengths) in the "
+            "current panorama; far or side-only glimpses are unknown."),
+        "ADVANCE_STRAIGHT": (
+            "ADVANCE_STRAIGHT: completed when the keyframes show forward "
+            "translation along the described route without turning off it "
+            "and the current panorama shows either the named end condition "
+            "or the next decision area (junction, doorway, room opening) "
+            "ahead or beside."),
+        "FOLLOW_PATH_BOUNDARY": (
+            "FOLLOW_PATH_BOUNDARY: completed when the keyframes show forward "
+            "translation with the referenced boundary (wall, railing, rug, "
+            "hallway) kept on the stated side and the current panorama shows "
+            "the named end condition or the next decision area ahead or "
+            "beside."),
+        "CROSS_SPACE": (
+            "CROSS_SPACE: completed when the far side of the referenced "
+            "space is reached: the space just crossed lies behind the camera "
+            "and its far boundary or exit is beside or immediately ahead."),
+        "CIRCUMNAVIGATE": (
+            "CIRCUMNAVIGATE: completed when the obstacle lies beside or "
+            "behind the camera on the instructed side and the route beyond "
+            "it is ahead."),
+        "BETWEEN_OBJECTS": (
+            "BETWEEN_OBJECTS: completed when the two referenced objects lie "
+            "beside or behind the camera, one on each side, and the route "
+            "beyond the gap is ahead."),
+        "TURN_LEFT": (
+            "TURN_LEFT: completed when the history contains left turn "
+            "commands and the FRONT view of the current panorama shows the "
+            "new route (corridor, doorway, opening or landmark the turn aims "
+            "at) with the previous forward direction now to the right or "
+            "behind.  A front view that still shows the old route or a wall "
+            "is unknown."),
+        "TURN_RIGHT": (
+            "TURN_RIGHT: completed when the history contains right turn "
+            "commands and the FRONT view of the current panorama shows the "
+            "new route (corridor, doorway, opening or landmark the turn aims "
+            "at) with the previous forward direction now to the left or "
+            "behind.  A front view that still shows the old route or a wall "
+            "is unknown."),
+        "TURN_AROUND": (
+            "TURN_AROUND: completed when the history contains turn commands "
+            "summing to roughly a half rotation and the FRONT view of the "
+            "current panorama shows what was behind the camera at the "
+            "previous node."),
+        "TURN_TO_LANDMARK": (
+            "TURN_TO_LANDMARK: completed when the named landmark is in the "
+            "FRONT sector of the current panorama after the turn; a landmark "
+            "still to the side is unknown."),
+        "VERTICAL_UP": (
+            "VERTICAL_UP: completed only when the current panorama is on the "
+            "upper level: the staircase lies behind or beside the camera and "
+            "the floor ahead is level.  A camera still on the steps is "
+            "unknown."),
+        "VERTICAL_DOWN": (
+            "VERTICAL_DOWN: completed only when the current panorama is on "
+            "the lower level: the staircase lies behind or beside the camera "
+            "and the floor ahead is level.  A camera still on the steps is "
+            "unknown."),
+        "STOP_WAIT": (
+            "STOP_WAIT: apply the STOP_WAIT RULE above.  A floor landmark "
+            "(rug, carpet, mat, runner, tiled area) counts as reached when it "
+            "appears at the bottom edge of the front view or under the "
+            "camera in the side views."),
+    }
+    RGB_ONLY_COMPLETION_RELATION_RULES_V3B = {
+        **RGB_ONLY_COMPLETION_RELATION_RULES,
+        "EXIT_REGION": (
+            "EXIT_REGION: completed only if the current panorama is taken "
+            "OUTSIDE the source region: its exit doorway/opening lies in a "
+            "side or rear sector and the front and side views show a "
+            "different region (hallway, other room).  The source region's "
+            "interior seen THROUGH a doorway behind or beside the camera is "
+            "evidence of having exited, not of still being inside.  Standing "
+            "inside the region with the doorway still ahead, however close, "
+            "is unknown."),
+        "PASS_LANDMARK": (
+            "PASS_LANDMARK: completed when the named landmark lies beside "
+            "(left or right) or behind the camera in the current panorama "
+            "after having been ahead at the previous node or in the "
+            "keyframes.  For an extended landmark (a room or area, counters, "
+            "a carpet runner, a row of furniture) passing means the camera "
+            "has moved along it so that its near end is behind and at most "
+            "its far end remains beside.  A landmark still squarely ahead is "
+            "unknown."),
+        "TURN_LEFT": (
+            "TURN_LEFT: completed when the history contains left turn "
+            "commands and the current panorama shows the camera heading "
+            "along a route different from the previous node's: what was "
+            "ahead at the previous node is now to the right or behind, and "
+            "walkable route continues ahead or ahead-left.  Do not require a "
+            "corridor or doorway centred in the front view."),
+        "TURN_RIGHT": (
+            "TURN_RIGHT: completed when the history contains right turn "
+            "commands and the current panorama shows the camera heading "
+            "along a route different from the previous node's: what was "
+            "ahead at the previous node is now to the left or behind, and "
+            "walkable route continues ahead or ahead-right.  Do not require "
+            "a corridor or doorway centred in the front view."),
+        "STOP_WAIT": (
+            "STOP_WAIT: apply the STOP_WAIT RULE above with these "
+            "clarifications.  (1) The camera heading after arrival is "
+            "arbitrary, so for near / at / beside / next to relations the "
+            "landmark may lie in ANY sector (front, left, right or rear) as "
+            "long as it is at close range (about one to two body lengths); "
+            "only a landmark far behind the camera means it was passed.  "
+            "Require the front sector only when the instruction says facing "
+            "/ in front of / toward.  (2) A floor landmark (rug, carpet, mat, "
+            "runner, tiled area) counts as reached when it appears at the "
+            "bottom edge of any view or under the camera.  (3) For 'stop "
+            "once you exit X' / 'wait just outside the door': completed when "
+            "the doorway is beside or behind the camera at close range, even "
+            "if X's interior remains visible through it."),
+    }
+    RGB_ONLY_COMPLETION_GENERIC_RELATION_RULE = (
+        "GENERIC: completed only when the current panorama shows the camera "
+        "at the spatial relation written in spatial_relation / "
+        "completion_cue (not merely with the landmark somewhere in view) and "
+        "the keyframes show the transition into it.")
+    RGB_ONLY_COMPLETION_SECTORS = (
+        "front", "left", "right", "rear", "not_visible", "not_applicable")
+
+    @classmethod
+    def rgb_only_completion_form_rules(cls, forms, version):
+        """RELATION RULE block for the active form and its secondary forms."""
+        table = (cls.RGB_ONLY_COMPLETION_RELATION_RULES_V3B
+                 if version == "v3b_relation_rules_relaxed"
+                 else cls.RGB_ONLY_COMPLETION_RELATION_RULES)
+        names = [name for name in table if name in forms]
+        rules = [table[name] for name in names]
+        if not rules:
+            rules = [cls.RGB_ONLY_COMPLETION_GENERIC_RELATION_RULE]
+        return "\nRELATION RULE (completed requires this, visibility alone " \
+               "is not enough):\n" + "\n".join(rules) + "\n"
+
+    @classmethod
+    def rgb_only_completion_schema(cls, version):
+        """Response schema of the RGB-only edge judge for ``version``."""
+        if version not in cls.RGB_ONLY_COMPLETION_PROMPT_VERSIONS:
+            raise ValueError(
+                f"unknown rgb-only-completion prompt version {version!r}")
+        properties = {
+            "status": {"type": "string", "enum": ["completed", "unknown"]},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "reason": {"type": "string"},
+            "visual_evidence": {"type": "string"},
+            "temporal_evidence": {"type": "string"},
+        }
+        if version in cls.RGB_ONLY_COMPLETION_EVIDENCE_VERSIONS:
+            properties.update({
+                "landmark_visible_current": {"type": "boolean"},
+                "landmark_sector_current": {
+                    "type": "string",
+                    "enum": list(cls.RGB_ONLY_COMPLETION_SECTORS)},
+                "relation_satisfied": {"type": "boolean"},
+                "transition_observed": {"type": "boolean"},
+            })
+        return {"type": "object", "properties": properties,
+                "required": list(properties)}
+
+    @staticmethod
+    def _as_bool(value, field):
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"true", "yes", "1"}:
+            return True
+        if text in {"false", "no", "0"}:
+            return False
+        raise ValueError(f"{field} must be a boolean, got {value!r}")
+
+    @classmethod
+    def normalize_rgb_only_completion_result(cls, version, result,
+                                             sanitized_actions):
+        """Validate a raw judge answer; shared by the online judge and replay.
+
+        Returns the status/confidence plus, for v3, the evidence fields.
+        The deterministic overrides live here so both paths agree.
+        """
+        status = str(result["status"]).strip().lower()
+        if status not in {"completed", "unknown"}:
+            raise ValueError("status must be completed or unknown")
+        confidence = float(result["confidence"])
+        if not 0.0 <= confidence <= 1.0:
+            raise ValueError("confidence must be in [0,1]")
+        overrides = []
+        # An empty action edge cannot establish a new spatial boundary.
+        if status == "completed" and not sanitized_actions:
+            status = "unknown"
+            confidence = min(confidence, 0.49)
+            overrides.append("empty_action_edge")
+        evidence = {}
+        if version in cls.RGB_ONLY_COMPLETION_EVIDENCE_VERSIONS:
+            sector = str(result["landmark_sector_current"]).strip().lower()
+            synonyms = {"behind": "rear", "back": "rear", "ahead": "front",
+                        "none": "not_visible", "absent": "not_visible"}
+            sector = synonyms.get(sector, sector)
+            if sector not in cls.RGB_ONLY_COMPLETION_SECTORS:
+                raise ValueError(
+                    "landmark_sector_current must be one of "
+                    f"{cls.RGB_ONLY_COMPLETION_SECTORS}, got {sector!r}")
+            evidence = {
+                "landmark_visible_current": cls._as_bool(
+                    result["landmark_visible_current"],
+                    "landmark_visible_current"),
+                "landmark_sector_current": sector,
+                "relation_satisfied": cls._as_bool(
+                    result["relation_satisfied"], "relation_satisfied"),
+                "transition_observed": cls._as_bool(
+                    result["transition_observed"], "transition_observed"),
+            }
+            # The judge's own evidence fields must support its verdict.
+            if status == "completed" and not evidence["relation_satisfied"]:
+                status = "unknown"
+                confidence = min(confidence, 0.49)
+                overrides.append("relation_not_satisfied")
+        return {
+            "status": status,
+            "confidence": confidence,
+            "model_status": str(result["status"]).strip().lower(),
+            "overrides": overrides,
+            "evidence": evidence,
+        }
+
     @classmethod
     def render_rgb_only_completion_prompt(
             cls, version, item, following, action_summary,
@@ -7864,6 +8187,12 @@ translation continued (the robot passed it instead of stopping at it).
             form_rules = cls.RGB_ONLY_COMPLETION_MOTION_STATE_RULE
             if "STOP_WAIT" in forms:
                 form_rules += cls.RGB_ONLY_COMPLETION_STOP_WAIT_RULE
+            if version in cls.RGB_ONLY_COMPLETION_EVIDENCE_VERSIONS:
+                form_rules += (
+                    cls.RGB_ONLY_COMPLETION_EVIDENCE_PROTOCOL +
+                    cls.RGB_ONLY_COMPLETION_INVALID_UNKNOWN_REASONS +
+                    cls.rgb_only_completion_form_rules(forms, version) +
+                    cls.RGB_ONLY_COMPLETION_FALSE_POSITIVE_GUARD)
         return f"""You are the RGB-only edge completion judge for an R2R robot.
 
 Decide whether the REAL observed transition from the previous node, through
@@ -7958,38 +8287,23 @@ semantic spatial relation is UNKNOWN. Return JSON only."""
         prompt = self.render_rgb_only_completion_prompt(
             self.rgb_only_completion_prompt_version, item, following,
             action_summary, previous_semantics, current_semantics)
-        schema = {
-            "type": "object",
-            "properties": {
-                "status": {"type": "string", "enum": ["completed", "unknown"]},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "reason": {"type": "string"},
-                "visual_evidence": {"type": "string"},
-                "temporal_evidence": {"type": "string"},
-            },
-            "required": ["status", "confidence", "reason",
-                         "visual_evidence", "temporal_evidence"],
-        }
+        version = self.rgb_only_completion_prompt_version
+        schema = self.rgb_only_completion_schema(version)
 
         def validate(result):
-            status = str(result["status"]).strip().lower()
-            if status not in {"completed", "unknown"}:
-                raise ValueError("status must be completed or unknown")
-            confidence = float(result["confidence"])
-            if not 0.0 <= confidence <= 1.0:
-                raise ValueError("confidence must be in [0,1]")
-            # An empty action edge cannot establish a new spatial boundary.
-            if status == "completed" and not sanitized_actions:
-                status = "unknown"
-                confidence = min(confidence, 0.49)
+            normalized = self.normalize_rgb_only_completion_result(
+                version, result, sanitized_actions)
             return {
-                "status": status,
-                "confidence": confidence,
+                "status": normalized["status"],
+                "confidence": normalized["confidence"],
                 "reason": str(result["reason"]),
                 "visual_evidence": str(result["visual_evidence"]),
                 "temporal_evidence": {
                     "rgb_chronology": str(result["temporal_evidence"]),
                 },
+                "relation_evidence": normalized["evidence"],
+                "validation_overrides": normalized["overrides"],
+                "prompt_version": version,
                 "motion_evidence": action_summary,
                 "policy_input_contract": "rgb_only_v1",
                 "privileged_inputs_used": [],

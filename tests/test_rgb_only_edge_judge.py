@@ -181,6 +181,119 @@ class RGBOnlyEdgeJudgeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "rgb-only-completion"):
             NavigationVLMHarness.render_rgb_only_completion_prompt(
                 "bogus", {}, {}, {}, {}, {})
+        with self.assertRaisesRegex(ValueError, "rgb-only-completion"):
+            NavigationVLMHarness.rgb_only_completion_schema("bogus")
+
+    V3 = "v3_sector_relation_evidence"
+
+    def test_v3_keeps_v2_rules_and_adds_evidence_protocol(self):
+        backend, result = self.judge(
+            5, prompt_version=self.V3, sub_instruction=self.stop_wait_stage())
+        prompt = backend.calls[-1]["prompt"]
+        for marker in ("MOTION-STATE RULE", "STOP_WAIT RULE",
+                       "EVIDENCE PROTOCOL", "REASONS THAT NEVER JUSTIFY UNKNOWN",
+                       "RELATION RULE", "STOP_WAIT: apply the STOP_WAIT RULE",
+                       "FALSE-POSITIVE GUARD", "CONFIDENCE:"):
+            self.assertIn(marker, prompt)
+        # Everything new sits in the form_rules slot after the JSON blocks.
+        self.assertLess(prompt.index("RGB detector evidence at CURRENT node"),
+                        prompt.index("EVIDENCE PROTOCOL"))
+        self.assertLess(prompt.index("FALSE-POSITIVE GUARD"),
+                        prompt.index("Image 0 is the previous panorama"))
+        schema = backend.calls[-1]["schema"]
+        for field in ("landmark_visible_current", "landmark_sector_current",
+                      "relation_satisfied", "transition_observed"):
+            self.assertIn(field, schema["properties"])
+            self.assertIn(field, schema["required"])
+        self.assertEqual(result["status"], "unknown")
+        self.assertEqual(result["prompt_version"], self.V3)
+        self.assertEqual(result["relation_evidence"]["landmark_sector_current"],
+                         "not_visible")
+
+    def test_v3_relation_rule_follows_active_and_secondary_forms(self):
+        backend, _ = self.judge(5, prompt_version=self.V3)
+        prompt = backend.calls[-1]["prompt"]
+        self.assertIn("ENTER_REGION: completed only if", prompt)
+        self.assertNotIn("EXIT_REGION: completed only if", prompt)
+        self.assertNotIn("GENERIC: completed only when", prompt)
+        backend, _ = self.judge(
+            5, prompt_version=self.V3,
+            sub_instruction=self.stop_wait_stage(
+                form="TURN_LEFT", secondary_forms=["PASS_LANDMARK"]))
+        prompt = backend.calls[-1]["prompt"]
+        self.assertIn("TURN_LEFT: completed when", prompt)
+        self.assertIn("PASS_LANDMARK: completed only if", prompt)
+        self.assertNotIn("STOP_WAIT RULE", prompt)
+        prompt = NavigationVLMHarness.render_rgb_only_completion_prompt(
+            self.V3, {"sub_instruction_id": 0, "form": "OTHER",
+                      "navigation_instruction": "go over there"},
+            {}, {"chronological_actions": []}, {}, {})
+        self.assertIn("GENERIC: completed only when", prompt)
+        self.assertNotIn(": completed only if", prompt)
+
+    def test_v3b_shares_protocol_and_relaxes_named_rules(self):
+        v3b = "v3b_relation_rules_relaxed"
+        self.assertEqual(NavigationVLMHarness.rgb_only_completion_schema(v3b),
+                         NavigationVLMHarness.rgb_only_completion_schema(self.V3))
+        for form, marker in (("PASS_LANDMARK", "extended landmark"),
+                             ("TURN_LEFT", "Do not require a corridor"),
+                             ("STOP_WAIT", "may lie in ANY sector"),
+                             ("EXIT_REGION", "THROUGH a doorway")):
+            backend, _ = self.judge(
+                5, prompt_version=v3b,
+                sub_instruction=self.stop_wait_stage(form=form))
+            prompt = backend.calls[-1]["prompt"]
+            self.assertIn("EVIDENCE PROTOCOL", prompt)
+            self.assertIn(marker, prompt, form)
+            backend, _ = self.judge(
+                5, prompt_version=self.V3,
+                sub_instruction=self.stop_wait_stage(form=form))
+            self.assertNotIn(marker, backend.calls[-1]["prompt"], form)
+
+    def test_v2_schema_has_no_evidence_fields(self):
+        schema = NavigationVLMHarness.rgb_only_completion_schema(
+            "v2_form_aware_stop_relation")
+        self.assertNotIn("relation_satisfied", schema["properties"])
+        self.assertEqual(sorted(schema["required"]), sorted(
+            ["status", "confidence", "reason", "visual_evidence",
+             "temporal_evidence"]))
+
+    def test_v3_normalization_overrides_and_coercions(self):
+        normalize = NavigationVLMHarness.normalize_rgb_only_completion_result
+        actions = [{"action": "move_forward"}]
+        base = {"status": "Completed", "confidence": 0.9, "reason": "r",
+                "visual_evidence": "v", "temporal_evidence": "t",
+                "landmark_visible_current": "true",
+                "landmark_sector_current": "Behind",
+                "relation_satisfied": True, "transition_observed": "yes"}
+        out = normalize(self.V3, base, actions)
+        self.assertEqual(out["status"], "completed")
+        self.assertEqual(out["overrides"], [])
+        self.assertEqual(out["evidence"], {
+            "landmark_visible_current": True,
+            "landmark_sector_current": "rear",
+            "relation_satisfied": True, "transition_observed": True})
+        # A completed verdict whose own evidence denies the relation is
+        # demoted deterministically.
+        out = normalize(self.V3, {**base, "relation_satisfied": False}, actions)
+        self.assertEqual(out["status"], "unknown")
+        self.assertLessEqual(out["confidence"], 0.49)
+        self.assertEqual(out["overrides"], ["relation_not_satisfied"])
+        self.assertEqual(out["model_status"], "completed")
+        # The empty-edge override applies to every version.
+        out = normalize("v2_form_aware_stop_relation",
+                        {k: base[k] for k in ("status", "confidence")}, [])
+        self.assertEqual(out["overrides"], ["empty_action_edge"])
+        self.assertEqual(out["evidence"], {})
+        with self.assertRaisesRegex(ValueError, "landmark_sector_current"):
+            normalize(self.V3, {**base, "landmark_sector_current": "up"},
+                      actions)
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            normalize(self.V3, {**base, "relation_satisfied": "maybe"},
+                      actions)
+        with self.assertRaises(KeyError):
+            normalize(self.V3, {k: base[k] for k in ("status", "confidence")},
+                      actions)
 
 
 if __name__ == "__main__":
