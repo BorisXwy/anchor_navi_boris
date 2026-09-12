@@ -390,6 +390,11 @@ def main():
     parser.add_argument(
         "--sequence-recovery-backtrack-attempts", type=int, default=4)
     parser.add_argument(
+        "--blocked-direction-exclusion-deg", type=float, default=22.5)
+    parser.add_argument(
+        "--no-in-place-turn-on-empty-gate", dest="in_place_turn_on_empty_gate",
+        action="store_false")
+    parser.add_argument(
         "--backtrack-method", choices=["action-reversal", "visual"],
         default="action-reversal")
     parser.add_argument("--backtrack-target-node", default=None)
@@ -459,6 +464,9 @@ def main():
             args.sequence_min_classification_confidence),
         "sequence_recovery_backtrack_attempts": (
             args.sequence_recovery_backtrack_attempts),
+        "blocked_direction_exclusion_deg": (
+            args.blocked_direction_exclusion_deg),
+        "in_place_turn_on_empty_gate": args.in_place_turn_on_empty_gate,
         "backtrack_method": args.backtrack_method,
         "backtrack_planner_profile": args.backtrack_planner_profile,
         "backtrack_max_attempts_per_hop": (
@@ -517,6 +525,10 @@ def main():
                 str(args.sequence_min_classification_confidence),
                 "--sequence-recovery-backtrack-attempts",
                 str(args.sequence_recovery_backtrack_attempts),
+                "--blocked-direction-exclusion-deg",
+                str(args.blocked_direction_exclusion_deg),
+                *([] if args.in_place_turn_on_empty_gate
+                  else ["--no-in-place-turn-on-empty-gate"]),
                 "--backtrack-method", args.backtrack_method,
                 "--backtrack-planner-profile",
                 args.backtrack_planner_profile,

@@ -62,6 +62,7 @@ from semantic_point_strategy import (  # noqa: E402
 )
 from summarize_r2r_point_selection import metrics  # noqa: E402
 from track_cluster import make_cluster, read_video, render  # noqa: E402
+from direction_gate import DirectionGateEmptyError  # noqa: E402
 from vlm_harness import (  # noqa: E402
     NavigationVLMHarness, VLMProviderFatalError,
     between_panorama_endpoint_recovery_supported,
@@ -1910,6 +1911,77 @@ class VLMPointPromptVersionContractTest(unittest.TestCase):
         with self.assertRaisesRegex(
                 RuntimeError, "explicit right direction gate"):
             harness.select_ground_target(stage, candidates, [])
+
+    def test_v10_empty_turn_gate_raises_typed_error_with_sector(self):
+        harness = NavigationVLMHarness(
+            FirstAllowedPointSelectionBackend(),
+            point_selection_prompt_version="v10_approach_relation_router")
+        candidates = self._eight_candidates()
+        # v10 left gate spans 30..150 degrees: views 45/90/135.
+        for index in (1, 2, 3):
+            candidates[index]["point"] = None
+            candidates[index]["target_mask"][:] = False
+        stage = dict(self._stage())
+        stage.update({"form": "TURN_LEFT", "navigation_instruction": "turn left"})
+        with self.assertRaises(DirectionGateEmptyError) as context:
+            harness.select_ground_target(stage, candidates, [])
+        self.assertEqual(context.exception.sector, "left")
+        self.assertIn("explicit left direction gate", str(context.exception))
+
+    def test_in_place_turn_metadata_limits_turn_gate_to_forward_views(self):
+        backend = FirstAllowedPointSelectionBackend()
+        harness = NavigationVLMHarness(
+            backend,
+            point_selection_prompt_version="v10_approach_relation_router")
+        stage = dict(self._stage())
+        stage.update({
+            "form": "TURN_LEFT", "navigation_instruction": "turn left",
+            "metadata": {"in_place_turn_executed": {
+                "active": True, "sector": "left"}},
+        })
+        chosen, _, record = harness.select_ground_target(
+            stage, self._eight_candidates(), [])
+        self.assertEqual(record["direction_gate"]["sector"], "forward")
+        # Forward three views of the turned heading: 0, +45 (index 1), -45 (index 7).
+        self.assertEqual(
+            sorted(record["direction_gate"]["allowed_after_gate"]), [0, 1, 7])
+        self.assertIn(chosen, {0, 1, 7})
+
+        candidates = self._eight_candidates()
+        for index in (0, 1, 7):
+            candidates[index]["point"] = None
+            candidates[index]["target_mask"][:] = False
+        with self.assertRaises(DirectionGateEmptyError) as context:
+            harness.select_ground_target(stage, candidates, [])
+        self.assertEqual(context.exception.sector, "forward")
+
+        # Without the metadata the same stage keeps its ordinary left gate.
+        plain_stage = dict(stage, metadata={})
+        _, _, plain_record = harness.select_ground_target(
+            plain_stage, self._eight_candidates(), [])
+        self.assertEqual(plain_record["direction_gate"]["sector"], "left")
+
+    def test_v10_readmits_soft_excluded_floor_views_before_no_candidate_error(self):
+        harness = NavigationVLMHarness(
+            FirstAllowedPointSelectionBackend(),
+            point_selection_prompt_version="v10_approach_relation_router")
+        candidates = self._eight_candidates()
+        for index, candidate in enumerate(candidates):
+            if index != 4:
+                candidate["point"] = None
+                candidate["target_mask"][:] = False
+        # The only floor-bearing view sits inside the soft incoming cone.
+        candidates[4]["excluded"] = True
+        candidates[4]["hard_excluded"] = False
+        chosen, _, record = harness.select_ground_target(
+            self._stage(), candidates, [])
+        self.assertEqual(chosen, 4)
+        self.assertEqual(record["allowed_views"], [4])
+
+        # A sequence-blocked (hard) view is never reintroduced.
+        candidates[4]["hard_excluded"] = True
+        with self.assertRaisesRegex(RuntimeError, "No floor-bearing candidate"):
+            harness.select_ground_target(self._stage(), candidates, [])
 
     def test_v18_rejects_refined_view_that_reenters_incoming_direction(self):
         backend = EightViewRefinementBackend(

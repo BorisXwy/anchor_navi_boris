@@ -773,9 +773,24 @@ def _run_habitat_episode(argv=None):
               "to confirm the stored node; visual is the older VLM-guided "
               "point-navigation search with an embedding similarity gate"))
     p.add_argument("--sequence-max-exploration-hops", type=int, default=30)
-    p.add_argument("--sequence-max-blocked-directions", type=int, default=5)
+    p.add_argument("--sequence-max-blocked-directions", type=int, default=5,
+                   help=("judge-confirmed blocked directions per node before "
+                         "the episode ends; executor failures are excluded "
+                         "but do not count"))
     p.add_argument("--sequence-min-classification-confidence", type=float, default=0.5)
     p.add_argument("--sequence-recovery-backtrack-attempts", type=int, default=4)
+    p.add_argument(
+        "--blocked-direction-exclusion-deg", type=float,
+        default=InstructionVLMPointSelector.DEFAULT_BLOCKED_DIRECTION_EXCLUSION_DEG,
+        help=("half-width of the hard exclusion cone around each blocked "
+              "direction; 22.5 removes exactly the nearest eight-view photo, "
+              "50 is the pre-2026-09-12 behaviour"))
+    p.add_argument(
+        "--no-in-place-turn-on-empty-gate", dest="in_place_turn_on_empty_gate",
+        action="store_false",
+        help=("end the episode when an explicit turn clause has no floor "
+              "inside its direction gate instead of turning in place once "
+              "and letting the completion judge decide"))
     p.add_argument("--output-dir", type=Path, default=ROOT / "outputs/random_exploration")
     p.add_argument("--seed", type=int, default=17)
     args = p.parse_args(argv)
@@ -1339,7 +1354,9 @@ def _run_habitat_episode(argv=None):
             segmenter=segmenter, semantic_detector=semantic_detector,
             vlm_harness=vlm_harness, video_composer=policy_video_bridge,
             views=args.views, scan_step=math.radians(args.scan_step_deg),
-            policy_input_contract="rgb_only_v1")
+            policy_input_contract="rgb_only_v1",
+            blocked_direction_exclusion_deg=(
+                args.blocked_direction_exclusion_deg))
 
     graph_memory = NavigationGraphMemory(
         args.output_dir / "navigation_graph",
@@ -1436,7 +1453,8 @@ def _run_habitat_episode(argv=None):
             full_instruction=instruction,
             views=args.views,
             backtrack_method=args.backtrack_method,
-            turn_step_deg=args.turn_step_deg)
+            turn_step_deg=args.turn_step_deg,
+            in_place_turn_on_empty_gate=args.in_place_turn_on_empty_gate)
         sequence_exploration_result = sequence_strategy.run(
             initial_action_heading=0.0, initial_global_step=total_step)
         yaw = sequence_exploration_result.final_yaw

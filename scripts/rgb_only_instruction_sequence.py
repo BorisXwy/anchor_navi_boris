@@ -17,6 +17,10 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from direction_gate import (
+    IN_PLACE_TURN_PHASE, TURN_GATE_CENTER_DEG, DirectionGateEmptyError,
+    plan_in_place_turn,
+)
 from instruction_completion_judge import (
     RGBOnlyNodeTransitionInstructionCompletionJudge,
 )
@@ -101,6 +105,42 @@ def prepend_turn_start_keyframe(output_dir, hop_index, turn_start_rgb,
         item["keyframe_index"] = int(item.get("keyframe_index", 0)) + 1
         shifted.append(item)
     return [turn_start_record] + shifted
+
+
+def in_place_turn_keyframes(output_dir, hop_index, frames, action_records,
+                            count=5):
+    """Persist an even subsample of an in-place turn as edge keyframes.
+
+    ``frames[0]`` is the view before the first turn command and
+    ``frames[i]`` the view after ``action_records[i - 1]``, so the judge gets
+    the same chronological storyboard a forward hop gets from the executor.
+    """
+    output_dir = Path(output_dir)
+    keyframes_dir = output_dir / "edge_keyframes"
+    keyframes_dir.mkdir(parents=True, exist_ok=True)
+    total = len(frames)
+    indices = sorted(set(
+        int(round(value)) for value in
+        np.linspace(0, total - 1, max(2, min(int(count), total))).tolist()))
+    selected = []
+    records = []
+    for order, index in enumerate(indices):
+        frame = np.asarray(frames[index], np.uint8)[..., :3]
+        selected.append(frame)
+        path = keyframes_dir / (
+            f"target_{int(hop_index):02d}_in_place_turn_{order:02d}.jpg")
+        Image.fromarray(frame).save(path, quality=92)
+        records.append({
+            "step": index - 1,
+            "phase": IN_PLACE_TURN_PHASE,
+            "action": (str(action_records[index - 1]["action"])
+                       if index >= 1 else None),
+            "policy_input_contract": "rgb_only_v1",
+            "keyframe_index": order,
+            "source_frame_index": index,
+            "image_path": str(path.relative_to(output_dir)),
+        })
+    return selected, records
 
 
 @dataclass
@@ -484,7 +524,8 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
             recovery_backtrack_attempts_per_hop=2,
             recovery_minimum_visual_similarity=0.75,
             full_instruction=None, views=8, scan_step_deg=15.0,
-            backtrack_method="action-reversal", turn_step_deg=None):
+            backtrack_method="action-reversal", turn_step_deg=None,
+            in_place_turn_on_empty_gate=True):
         if backtrack_method not in BACKTRACK_METHODS:
             raise ValueError(
                 f"unknown backtrack_method {backtrack_method!r}; "
@@ -521,12 +562,54 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
         self.backtrack_method = str(backtrack_method)
         # Discrete turning keeps the scan step equal to the simulator turn
         # step (the CLI enforces it), so the scan step is the default here.
+        self.turn_step_deg = float(
+            scan_step_deg if turn_step_deg is None else turn_step_deg)
         self.action_reversal_backtracker = RGBOnlyActionReversalBacktracker(
             sim, graph_memory, vlm_harness,
-            turn_step_deg=(scan_step_deg if turn_step_deg is None
-                           else turn_step_deg),
+            turn_step_deg=self.turn_step_deg,
             video_composer=video_composer,
             full_instruction=self.full_instruction)
+        self.in_place_turn_on_empty_gate = bool(in_place_turn_on_empty_gate)
+        if self.in_place_turn_on_empty_gate:
+            for sector in TURN_GATE_CENTER_DEG:
+                plan_in_place_turn(sector, self.turn_step_deg)
+
+    def _emit_video(self, rgb, instruction, target_index, phase):
+        if self.video_composer is None:
+            return
+        bgr = np.ascontiguousarray(np.asarray(rgb, np.uint8)[..., :3][..., ::-1])
+        self.video_composer.emit(
+            bgr, instruction, target_index, phase,
+            full_instruction=self.full_instruction or instruction,
+            sub_instruction=instruction)
+
+    def _turn_in_place_to_gate_center(self, sector, hop_index, heading,
+                                      global_step, turn_start_rgb,
+                                      sub_instruction):
+        """Rotate to the empty gate's centre; return the plan, frames, pose."""
+        plan = plan_in_place_turn(sector, self.turn_step_deg)
+        instruction = (
+            f"in-place {sector} turn for "
+            f"{sub_instruction.navigation_instruction!r}")
+        self.sim.emit_evaluation_event("direction_gate_in_place_turn_started", {
+            "sub_instruction_id": int(sub_instruction.sub_instruction_id),
+            "sector": sector, "turn_command_count": len(plan),
+            "target_index": int(hop_index),
+        })
+        frames = [turn_start_rgb]
+        for record in plan:
+            observations = self.sim.step(record["action"])
+            heading = wrap_angle(
+                heading + math.radians(record["commanded_turn_deg"]))
+            global_step += 1
+            frames.append(observations["rgb"])
+            self._emit_video(observations["rgb"], instruction, hop_index,
+                             record["phase"])
+        self.sim.emit_evaluation_event("direction_gate_in_place_turn_finished", {
+            "sub_instruction_id": int(sub_instruction.sub_instruction_id),
+            "sector": sector, "target_index": int(hop_index),
+        })
+        return plan, frames, heading, global_step
 
     def _recover(self, target_node_id, heading, global_step, target_index,
                  action_history, *, create_revisit_node):
@@ -538,11 +621,116 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
             target_node_id, heading, global_step, target_index,
             action_history)
 
+    def _finish_hop_at_stop_node(
+            self, *, hop_index, sub_instruction, stage, action_history,
+            arrival_signal, edge_kind, node_metadata, edge_metadata,
+            selected_heading, edge_keyframes, edge_keyframe_records, record,
+            heading, global_step, recoveries):
+        """Record the node the agent stands at, judge it and advance state.
+
+        Shared by a forward point-navigation arrival and the direction-gate
+        in-place turn.  ``record`` and ``recoveries`` are updated in place.
+        Returns the loop variables the caller must adopt plus ``end_reason``
+        (``None`` unless the episode must stop here).
+        """
+        stop_rgbs = observe_six_rgb(self.sim)
+        completion_views = observe_eight_rgb(self.sim)
+        stop_node, stop_edge = self.graph_memory.add_navigation_stop_node(
+            position_xyz=None, base_yaw_rad=None,
+            global_step=global_step, six_views=stop_rgbs,
+            six_depths=None, sub_instruction=sub_instruction,
+            action_history=action_history,
+            arrival_signal=arrival_signal,
+            completion_views=completion_views,
+            metadata={"policy_input_contract": "rgb_only_v1", **node_metadata},
+            edge_kind=edge_kind,
+            edge_metadata={
+                **edge_metadata,
+                "edge_keyframes": edge_keyframe_records,
+                "policy_input_contract": "rgb_only_v1",
+            })
+        completion = self.completion_judge.judge(
+            stop_node, self.state.expected_sub_instruction_id,
+            completion_views, edge_keyframes).to_dict()
+        classification = {
+            "node_id": stop_node.node_id,
+            "belongs_to_sequence": bool(
+                completion["instruction_completed"]),
+            "matched_sub_instruction_id": (
+                self.state.expected_sub_instruction_id
+                if completion["instruction_completed"] else -1),
+            "expected_sub_instruction_id": (
+                self.state.expected_sub_instruction_id),
+            "confidence": float(completion["confidence"]),
+            "reason": completion["reason"],
+            "visual_evidence": completion["visual_evidence"],
+            "unknown_disposition": None,
+            "active_form": str(stage.get("form", "")).upper(),
+        }
+        directive = self.state.observe(
+            stop_node.node_id, classification, selected_heading)
+        record.update({
+            "navigation_graph_node_id": stop_node.node_id,
+            "navigation_graph_edge_id": stop_edge.edge_id,
+            "node_created_after_point_arrival": True,
+            "instruction_completion": completion,
+            "sub_instruction_sequence_classification": classification,
+            "sequence_directive": directive.to_dict(),
+            "sub_instruction_satisfied": bool(
+                completion["instruction_completed"]),
+        })
+        outcome = {
+            "heading": heading, "global_step": global_step,
+            "previous_action_history": action_history,
+            "backtracked": False, "end_reason": None,
+        }
+        if directive.action == "backtrack_and_block":
+            outcome["backtracked"] = True
+            backtrack_target = str(directive.backtrack_target_node_id)
+            if self.backtrack_method == "action-reversal":
+                # Reversal only undoes the edge that just ended at the
+                # current node, so the target must be its predecessor.
+                predecessor, _ = self.graph_memory.predecessor(
+                    stop_node.node_id)
+                if predecessor.node_id != backtrack_target:
+                    raise RuntimeError(
+                        "action reversal can only return along the last "
+                        f"edge: target {backtrack_target} is not the "
+                        f"predecessor {predecessor.node_id} of "
+                        f"{stop_node.node_id}")
+            recovery = self._recover(
+                backtrack_target, heading, global_step,
+                len(self.sub_instructions) + hop_index,
+                action_history, create_revisit_node=True)
+            record["sequence_recovery_backtrack"] = recovery.to_dict()
+            record["backtrack_method"] = self.backtrack_method
+            recoveries.append(dict(
+                recovery.to_dict(), backtrack_method=self.backtrack_method,
+                trigger="backtrack_and_block"))
+            if not recovery.success:
+                self.state.on_backtrack(False)
+                outcome["end_reason"] = "rgb_only_sequence_recovery_failed"
+                return outcome
+            outcome["heading"] = recovery.final_action_heading_rad
+            outcome["global_step"] = recovery.next_global_step
+            self.state.on_backtrack(
+                True, current_node_id=recovery.recovered_node_id)
+            outcome["previous_action_history"] = (
+                recovery.attempts[-1].get("action_history", [])
+                if recovery.attempts else [])
+        elif directive.action == "complete":
+            outcome["end_reason"] = "instruction_sequence_complete"
+        return outcome
+
     def run(self, initial_action_heading=0.0, initial_global_step=0):
         heading = float(initial_action_heading)
         global_step = int(initial_global_step)
         previous_action_history = []
         has_incoming_edge = False
+        # Heading at the end of the last forward edge.  An in-place turn
+        # changes ``heading`` but not where the agent came from, so the
+        # incoming-direction exclusion keeps using this value.
+        incoming_heading = None
         records = []
         recoveries = []
         selected_headings = []
@@ -557,7 +745,16 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
                 break
             sub_instruction = self.state.active_sub_instruction
             stage = sub_instruction.to_stage_dict()
-            back_heading = wrap_angle(heading + math.pi) if has_incoming_edge else None
+            in_place_turn = self.state.in_place_turn_record(
+                sub_instruction.sub_instruction_id)
+            if in_place_turn is not None:
+                stage["metadata"] = dict(
+                    stage.get("metadata", {}) or {},
+                    in_place_turn_executed=dict(in_place_turn, active=True))
+            back_heading = (
+                wrap_angle(incoming_heading + math.pi)
+                if has_incoming_edge and incoming_heading is not None
+                else None)
             # The selector turns the agent toward the chosen view before
             # returning; remember where its commands start in motion_log and
             # what the agent saw before turning so the edge can include them.
@@ -567,6 +764,7 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
             hop_start_node_id = self.graph_memory.nodes[-1].node_id
             hop_start_previous_action_history = previous_action_history
             hop_start_has_incoming_edge = has_incoming_edge
+            hop_start_incoming_heading = incoming_heading
             try:
                 selection = self.point_selector.select(PointSelectionRequest(
                     sim=self.sim, position=None, yaw=heading, stage=stage,
@@ -581,6 +779,74 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
                     maximum_initial_geodesic_m=None,
                     semantic_reference_rgb=None,
                     policy_input_contract="rgb_only_v1"))
+            except DirectionGateEmptyError as exc:
+                # An explicit turn clause has no floor-bearing view on its
+                # commanded side.  Face that side once, let the judge decide
+                # whether the turn is done, and continue; a second empty gate
+                # for the same clause (including the post-turn forward gate)
+                # ends the episode exactly like any other empty candidate set.
+                if (not self.in_place_turn_on_empty_gate or
+                        in_place_turn is not None or
+                        exc.sector not in TURN_GATE_CENTER_DEG):
+                    end_reason = f"vlm_selection_failed: {exc}"
+                    break
+                turn_plan, turn_frames, heading, global_step = (
+                    self._turn_in_place_to_gate_center(
+                        exc.sector, hop_index, heading, global_step,
+                        turn_start_rgb, sub_instruction))
+                edge_keyframes, edge_keyframe_records = in_place_turn_keyframes(
+                    self.output_dir, hop_index, turn_frames, turn_plan)
+                in_place_turn = {
+                    "sector": exc.sector,
+                    "target_index": hop_index,
+                    "turn_command_count": len(turn_plan),
+                    "pre_turn_heading_rad": hop_start_heading,
+                    "post_turn_heading_rad": heading,
+                    "trigger": str(exc),
+                }
+                self.state.record_in_place_turn(
+                    sub_instruction.sub_instruction_id, in_place_turn)
+                selected_headings.append(heading)
+                record = {
+                    "target_index": hop_index,
+                    "strategy": self.mode,
+                    "sub_instruction": sub_instruction.to_dict(),
+                    "in_place_turn": in_place_turn,
+                    "selected_action_heading_rad": heading,
+                    "action_history": turn_plan,
+                    "point_target_arrived": False,
+                    "arrived": False,
+                    "signal": IN_PLACE_TURN_PHASE,
+                    "end_reason": IN_PLACE_TURN_PHASE,
+                    "steps": turn_plan,
+                    "policy_input_contract": "rgb_only_v1",
+                    "privileged_inputs_used": [],
+                }
+                records.append(record)
+                outcome = self._finish_hop_at_stop_node(
+                    hop_index=hop_index, sub_instruction=sub_instruction,
+                    stage=stage, action_history=turn_plan,
+                    arrival_signal=IN_PLACE_TURN_PHASE,
+                    edge_kind="instruction_sequence_rgb_only_in_place_turn",
+                    node_metadata={
+                        "point_target_arrived": False,
+                        "in_place_turn": in_place_turn,
+                    },
+                    edge_metadata={"in_place_turn": in_place_turn},
+                    selected_heading=heading, edge_keyframes=edge_keyframes,
+                    edge_keyframe_records=edge_keyframe_records,
+                    record=record, heading=heading, global_step=global_step,
+                    recoveries=recoveries)
+                heading = outcome["heading"]
+                global_step = outcome["global_step"]
+                previous_action_history = outcome["previous_action_history"]
+                has_incoming_edge = True
+                if outcome["backtracked"]:
+                    incoming_heading = heading
+                if outcome["end_reason"] is not None:
+                    end_reason = outcome["end_reason"]
+                    break
+                continue
             except RuntimeError as exc:
                 # Same end_reason prefix as the legacy strategy: the evaluator
                 # categorises it (no_floor_bearing_candidate, ...) and still
@@ -688,100 +954,37 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
                             f"heading: {heading} vs {hop_start_heading}")
                     previous_action_history = hop_start_previous_action_history
                     has_incoming_edge = hop_start_has_incoming_edge
+                    incoming_heading = hop_start_incoming_heading
                 else:
                     previous_action_history = (
                         recovery.attempts[-1].get("action_history", [])
                         if recovery.attempts else [])
                     has_incoming_edge = True
+                    incoming_heading = heading
                 continue
 
-            stop_rgbs = observe_six_rgb(self.sim)
-            completion_views = observe_eight_rgb(self.sim)
-            stop_node, stop_edge = self.graph_memory.add_navigation_stop_node(
-                position_xyz=None, base_yaw_rad=None,
-                global_step=global_step, six_views=stop_rgbs,
-                six_depths=None, sub_instruction=sub_instruction,
-                action_history=action_history,
+            outcome = self._finish_hop_at_stop_node(
+                hop_index=hop_index, sub_instruction=sub_instruction,
+                stage=stage, action_history=action_history,
                 arrival_signal=navigation.signal,
-                completion_views=completion_views,
-                metadata={
-                    "policy_input_contract": "rgb_only_v1",
-                    "point_target_arrived": True,
-                }, edge_kind="instruction_sequence_rgb_only",
+                edge_kind="instruction_sequence_rgb_only",
+                node_metadata={"point_target_arrived": True},
                 edge_metadata={
                     "selected_action_heading_rad": selected_heading,
                     "point_selection_review": chosen.get("vlm_selection", {}),
-                    "edge_keyframes": edge_keyframe_records,
-                    "policy_input_contract": "rgb_only_v1",
-                })
-            completion = self.completion_judge.judge(
-                stop_node, self.state.expected_sub_instruction_id,
-                completion_views, edge_keyframes).to_dict()
-            classification = {
-                "node_id": stop_node.node_id,
-                "belongs_to_sequence": bool(
-                    completion["instruction_completed"]),
-                "matched_sub_instruction_id": (
-                    self.state.expected_sub_instruction_id
-                    if completion["instruction_completed"] else -1),
-                "expected_sub_instruction_id": (
-                    self.state.expected_sub_instruction_id),
-                "confidence": float(completion["confidence"]),
-                "reason": completion["reason"],
-                "visual_evidence": completion["visual_evidence"],
-                "unknown_disposition": None,
-                "active_form": str(stage.get("form", "")).upper(),
-            }
-            directive = self.state.observe(
-                stop_node.node_id, classification, selected_heading)
-            record.update({
-                "navigation_graph_node_id": stop_node.node_id,
-                "navigation_graph_edge_id": stop_edge.edge_id,
-                "node_created_after_point_arrival": True,
-                "instruction_completion": completion,
-                "sub_instruction_sequence_classification": classification,
-                "sequence_directive": directive.to_dict(),
-                "sub_instruction_satisfied": bool(
-                    completion["instruction_completed"]),
-            })
-            previous_action_history = action_history
+                },
+                selected_heading=selected_heading,
+                edge_keyframes=edge_keyframes,
+                edge_keyframe_records=edge_keyframe_records, record=record,
+                heading=heading, global_step=global_step,
+                recoveries=recoveries)
+            heading = outcome["heading"]
+            global_step = outcome["global_step"]
+            previous_action_history = outcome["previous_action_history"]
             has_incoming_edge = True
-
-            if directive.action == "backtrack_and_block":
-                backtrack_target = str(directive.backtrack_target_node_id)
-                if self.backtrack_method == "action-reversal":
-                    # Reversal only undoes the edge that just ended at the
-                    # current node, so the target must be its predecessor.
-                    predecessor, _ = self.graph_memory.predecessor(
-                        stop_node.node_id)
-                    if predecessor.node_id != backtrack_target:
-                        raise RuntimeError(
-                            "action reversal can only return along the last "
-                            f"edge: target {backtrack_target} is not the "
-                            f"predecessor {predecessor.node_id} of "
-                            f"{stop_node.node_id}")
-                recovery = self._recover(
-                    backtrack_target, heading, global_step,
-                    len(self.sub_instructions) + hop_index,
-                    action_history, create_revisit_node=True)
-                record["sequence_recovery_backtrack"] = recovery.to_dict()
-                record["backtrack_method"] = self.backtrack_method
-                recoveries.append(dict(
-                    recovery.to_dict(), backtrack_method=self.backtrack_method,
-                    trigger="backtrack_and_block"))
-                if not recovery.success:
-                    self.state.on_backtrack(False)
-                    end_reason = "rgb_only_sequence_recovery_failed"
-                    break
-                heading = recovery.final_action_heading_rad
-                global_step = recovery.next_global_step
-                self.state.on_backtrack(
-                    True, current_node_id=recovery.recovered_node_id)
-                previous_action_history = (
-                    recovery.attempts[-1].get("action_history", [])
-                    if recovery.attempts else [])
-            elif directive.action == "complete":
-                end_reason = "instruction_sequence_complete"
+            incoming_heading = heading
+            if outcome["end_reason"] is not None:
+                end_reason = outcome["end_reason"]
                 break
 
         return InstructionSequenceExplorationResult(

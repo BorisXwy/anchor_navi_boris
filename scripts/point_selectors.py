@@ -2065,9 +2065,15 @@ class InstructionVLMPointSelector(PointSelectionStrategy):
 
     mode = "instruction-vlm"
 
+    # Half the 45-degree eight-view spacing: a blocked view-centre ray excludes
+    # exactly that one panorama view instead of its neighbours as well.
+    DEFAULT_BLOCKED_DIRECTION_EXCLUSION_DEG = 22.5
+
     def __init__(self, segmenter, semantic_detector, vlm_harness,
                  video_composer, views=6, scan_step=math.radians(10),
-                 policy_input_contract="legacy_rgbd_geometry"):
+                 policy_input_contract="legacy_rgbd_geometry",
+                 blocked_direction_exclusion_deg=(
+                     DEFAULT_BLOCKED_DIRECTION_EXCLUSION_DEG)):
         self.segmenter = segmenter
         self.semantic_detector = semantic_detector
         self.vlm_harness = vlm_harness
@@ -2075,6 +2081,8 @@ class InstructionVLMPointSelector(PointSelectionStrategy):
         self.views = int(views)
         self.scan_step = float(scan_step)
         self.policy_input_contract = str(policy_input_contract)
+        self.blocked_direction_exclusion = math.radians(
+            float(blocked_direction_exclusion_deg))
 
     def select(self, request):
         if request.policy_input_contract != self.policy_input_contract:
@@ -2090,6 +2098,7 @@ class InstructionVLMPointSelector(PointSelectionStrategy):
                 0.0 if request.allow_historical_direction_fallback else
                 math.radians(50.0)),
             blocked_yaws=request.blocked_yaws,
+            blocked_direction_exclusion=self.blocked_direction_exclusion,
             reference_path=request.reference_path,
             reference_path_index=request.reference_path_index,
             minimum_initial_geodesic_m=(

@@ -15,11 +15,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from audit_rgb_only_contract import _violations  # noqa: E402
+from direction_gate import DirectionGateEmptyError  # noqa: E402
 from evaluate_point_navigation import termination_category  # noqa: E402
 from instruction_decomposer import SubInstruction  # noqa: E402
 from navigation_graph_memory import NavigationGraphMemory  # noqa: E402
 from point_navigation_executor import PointNavigationResult  # noqa: E402
-from point_selectors import PointSelectionResult  # noqa: E402
+import point_selectors  # noqa: E402
+from point_selectors import (  # noqa: E402
+    InstructionVLMPointSelector, PointSelectionRequest, PointSelectionResult,
+)
 from rgb_only_instruction_sequence import (  # noqa: E402
     RGBOnlyBacktrackResult, RGBOnlyInstructionSequenceExplorationStrategy,
 )
@@ -202,9 +206,38 @@ class RecordingVLMHarness:
                 "temporal_evidence": {}}
 
 
+class ScriptedGateSelector:
+    """Raise the scripted errors in order; otherwise act like TurningPointSelector."""
+
+    def __init__(self, errors, turn_steps=0):
+        self.errors = list(errors)
+        self.requests = []
+        self.turning = TurningPointSelector(turn_steps)
+
+    def select(self, request):
+        self.requests.append(request)
+        if self.errors:
+            error = self.errors.pop(0)
+            if error is not None:
+                raise error
+        return self.turning.select(request)
+
+
+class ScriptedVLMHarness(RecordingVLMHarness):
+    def __init__(self, statuses):
+        super().__init__()
+        self.statuses = list(statuses)
+
+    def judge_edge_instruction_completion_rgb_only(self, **kwargs):
+        result = super().judge_edge_instruction_completion_rgb_only(**kwargs)
+        status = self.statuses.pop(0) if self.statuses else "completed"
+        return dict(result, status=status,
+                    confidence=0.9 if status == "completed" else 0.4)
+
+
 def build_strategy(temporary_directory, point_selector, sub_instruction_count=2,
                    executor=None, vlm_harness=None,
-                   backtrack_method="action-reversal"):
+                   backtrack_method="action-reversal", **strategy_kwargs):
     raw = FakeRawSimulator()
     sim = RGBOnlyPolicySimulator(raw)
     graph = NavigationGraphMemory(
@@ -235,7 +268,7 @@ def build_strategy(temporary_directory, point_selector, sub_instruction_count=2,
             vlm_harness if vlm_harness is not None else UntouchableDependency()),
         segmenter=UntouchableDependency(),
         output_dir=temporary_directory, max_exploration_hops=5,
-        backtrack_method=backtrack_method)
+        backtrack_method=backtrack_method, **strategy_kwargs)
     return strategy, raw
 
 
@@ -423,6 +456,178 @@ class RGBOnlySequenceSelectionFailureTests(unittest.TestCase):
             strategy, _ = build_strategy(temporary_directory, selector)
             with self.assertRaises(ValueError):
                 strategy.run()
+
+
+class RGBOnlySequenceEmptyTurnGateTests(unittest.TestCase):
+    def test_empty_turn_gate_rotates_in_place_and_hands_edge_to_judge(self):
+        selector = ScriptedGateSelector([DirectionGateEmptyError("right")])
+        harness = RecordingVLMHarness()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            strategy, raw = build_strategy(
+                temporary_directory, selector, sub_instruction_count=1,
+                vlm_harness=harness)
+            result = strategy.run(initial_action_heading=0.0,
+                                  initial_global_step=3)
+            graph = strategy.graph_memory
+            keyframe_files = sorted(
+                (Path(temporary_directory) / "edge_keyframes").glob(
+                    "target_00_in_place_turn_*.jpg"))
+            self.assertEqual(len(keyframe_files), 5)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.end_reason, "instruction_sequence_complete")
+        self.assertEqual(raw.actions, ["turn_right"] * 6)
+        self.assertAlmostEqual(result.final_yaw, -math.pi / 2)
+        self.assertEqual(result.next_global_step, 9)
+        self.assertEqual(len(selector.requests), 1)
+
+        self.assertEqual(len(graph.nodes), 2)
+        edge = graph.edges[-1]
+        self.assertEqual(edge.edge_kind, "instruction_sequence_rgb_only_in_place_turn")
+        self.assertEqual(len(edge.action_history), 6)
+        self.assertEqual({item["action"] for item in edge.action_history},
+                         {"turn_right"})
+        self.assertEqual(edge.metadata["in_place_turn"]["sector"], "right")
+        self.assertEqual(graph.nodes[-1].arrival_signal,
+                         "direction_gate_in_place_turn")
+
+        judge_call = harness.judge_calls[0]
+        self.assertEqual(len(judge_call["edge_action_history"]), 6)
+        self.assertEqual(len(judge_call["edge_keyframes"]), 5)
+
+        record = result.records[0]
+        self.assertEqual(record["in_place_turn"]["sector"], "right")
+        self.assertEqual(record["in_place_turn"]["turn_command_count"], 6)
+        self.assertFalse(record["point_target_arrived"])
+        self.assertTrue(record["sub_instruction_satisfied"])
+        self.assertEqual(
+            result.state["in_place_turn_records_by_sub_instruction_id"][0][
+                "sector"], "right")
+        self.assertEqual(_violations(record), [])
+
+    def test_rear_gate_turns_half_a_rotation_left(self):
+        selector = ScriptedGateSelector([DirectionGateEmptyError("rear")])
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            strategy, raw = build_strategy(
+                temporary_directory, selector, sub_instruction_count=1,
+                vlm_harness=RecordingVLMHarness())
+            result = strategy.run()
+        self.assertEqual(raw.actions, ["turn_left"] * 12)
+        self.assertAlmostEqual(abs(result.final_yaw), math.pi)
+
+    def test_in_place_turn_is_used_once_per_sub_instruction(self):
+        selector = ScriptedGateSelector([
+            DirectionGateEmptyError("right"), DirectionGateEmptyError("forward")])
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            strategy, raw = build_strategy(
+                temporary_directory, selector, sub_instruction_count=1,
+                vlm_harness=ScriptedVLMHarness(["unknown"]))
+            result = strategy.run()
+        self.assertFalse(result.success)
+        self.assertTrue(result.end_reason.startswith("vlm_selection_failed:"))
+        self.assertIn("explicit forward direction gate", result.end_reason)
+        self.assertEqual(termination_category(result.end_reason),
+                         "no_floor_bearing_candidate")
+        self.assertEqual(raw.actions, ["turn_right"] * 6)
+        self.assertEqual(len(selector.requests), 2)
+        retry_stage = selector.requests[1].stage
+        self.assertTrue(
+            retry_stage["metadata"]["in_place_turn_executed"]["active"])
+        self.assertEqual(
+            retry_stage["metadata"]["in_place_turn_executed"]["sector"], "right")
+        self.assertEqual(len(result.records), 1)
+        self.assertFalse(result.records[0]["sub_instruction_satisfied"])
+
+    def test_second_side_gate_error_for_same_clause_ends_episode(self):
+        # Even if the harness reported a side sector again, the strategy
+        # itself refuses a second in-place turn for the same clause.
+        selector = ScriptedGateSelector([
+            DirectionGateEmptyError("left"), DirectionGateEmptyError("left")])
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            strategy, raw = build_strategy(
+                temporary_directory, selector, sub_instruction_count=1,
+                vlm_harness=ScriptedVLMHarness(["unknown"]))
+            result = strategy.run()
+        self.assertEqual(raw.actions, ["turn_left"] * 6)
+        self.assertEqual(termination_category(result.end_reason),
+                         "no_floor_bearing_candidate")
+
+    def test_in_place_turn_keeps_the_true_incoming_direction(self):
+        selector = ScriptedGateSelector(
+            [None, DirectionGateEmptyError("left"),
+             DirectionGateEmptyError("forward")], turn_steps=TURN_STEPS)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            executor = ForwardExecutor(temporary_directory)
+            strategy, raw = build_strategy(
+                temporary_directory, selector, sub_instruction_count=2,
+                executor=executor,
+                vlm_harness=ScriptedVLMHarness(["completed", "unknown"]))
+            result = strategy.run(initial_action_heading=0.0)
+        self.assertEqual(len(selector.requests), 3)
+        arrival_heading = -math.radians(15 * TURN_STEPS)
+        # Second request: after the forward hop, behind = arrival + pi.
+        self.assertAlmostEqual(
+            selector.requests[1].back_yaw,
+            (arrival_heading + math.pi + math.pi) % (2 * math.pi) - math.pi)
+        # Third request: the in-place left turn rotated the heading by +90
+        # degrees, but the agent still came from the same direction.
+        self.assertAlmostEqual(selector.requests[2].back_yaw,
+                               selector.requests[1].back_yaw)
+        self.assertAlmostEqual(selector.requests[2].yaw, 0.0)
+        self.assertEqual(result.completed_sub_instructions, 1)
+
+    def test_switch_off_restores_the_old_ending(self):
+        selector = ScriptedGateSelector([DirectionGateEmptyError("right")])
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            strategy, raw = build_strategy(
+                temporary_directory, selector, sub_instruction_count=1,
+                in_place_turn_on_empty_gate=False)
+            result = strategy.run()
+        self.assertEqual(raw.actions, [])
+        self.assertEqual(result.records, [])
+        self.assertEqual(termination_category(result.end_reason),
+                         "no_floor_bearing_candidate")
+
+    def test_turn_step_that_does_not_divide_the_gate_is_rejected_early(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with self.assertRaises(ValueError):
+                build_strategy(
+                    temporary_directory, ScriptedGateSelector([]),
+                    sub_instruction_count=1, scan_step_deg=40.0)
+
+
+class InstructionVLMPointSelectorConeTests(unittest.TestCase):
+    def _captured_exclusion(self, **selector_kwargs):
+        captured = {}
+
+        def fake_choose_view(*args, **kwargs):
+            captured.update(kwargs)
+            return None, []
+
+        selector = InstructionVLMPointSelector(
+            segmenter=None, semantic_detector=None, vlm_harness=None,
+            video_composer=None, views=8, policy_input_contract="rgb_only_v1",
+            **selector_kwargs)
+        request = PointSelectionRequest(
+            sim=None, position=None, yaw=0.0, stage={"form": "TURN_LEFT"},
+            target_index=0, rendered=[], motion_log=[], position_history=[],
+            blocked_yaws=[0.5], policy_input_contract="rgb_only_v1")
+        original = point_selectors.choose_view
+        point_selectors.choose_view = fake_choose_view
+        try:
+            selector.select(request)
+        finally:
+            point_selectors.choose_view = original
+        return captured["blocked_direction_exclusion"]
+
+    def test_default_blocked_cone_is_half_the_eight_view_spacing(self):
+        self.assertAlmostEqual(
+            self._captured_exclusion(), math.radians(22.5))
+
+    def test_legacy_fifty_degree_cone_remains_selectable(self):
+        self.assertAlmostEqual(
+            self._captured_exclusion(blocked_direction_exclusion_deg=50.0),
+            math.radians(50.0))
 
 
 if __name__ == "__main__":

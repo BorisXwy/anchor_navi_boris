@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from direction_gate import DirectionGateEmptyError
 from instruction_completion_evidence import (
     instruction_tokens, summarize_motion, summarize_semantic_transition,
     summarize_visual_transition)
@@ -2997,6 +2998,16 @@ Return only the requested JSON."""
                 direction_gate["reason"] = (
                     "compound portal/region transition keeps turn as a soft "
                     "follow-on prior")
+            in_place_turn_executed = bool(
+                ((stage.get("metadata", {}) or {}).get(
+                    "in_place_turn_executed", {}) or {}).get("active"))
+            if in_place_turn_executed and sector in {"left", "right", "rear"}:
+                # The strategy already rotated the camera to this sector's
+                # centre because it had no floor-bearing view.  The commanded
+                # side is now straight ahead, so the same gate is the forward
+                # three views of the turned heading; re-applying the side
+                # gate would turn a second time.
+                sector = "forward"
             sector_allowed = []
             strict_turn_commit = use_rgb_evidence_refinement
             direction_source = list(allowed)
@@ -3035,6 +3046,8 @@ Return only the requested JSON."""
                     sector_allowed.append(index)
                 elif (sector == "rear" and abs(relative_deg) >=
                       (135.0 if strict_turn_commit else 110.0)):
+                    sector_allowed.append(index)
+                elif sector == "forward" and abs(relative_deg) <= 45.0001:
                     sector_allowed.append(index)
             if sector is not None:
                 if (self._stage1_turn_soft and sector in {"left", "right"} and
@@ -3075,13 +3088,15 @@ Return only the requested JSON."""
                             "fallback": "forward_connected_floor_when_side_ground_missing",
                         }
                 if not sector_allowed:
-                    raise RuntimeError(
-                        "No floor-bearing candidate remains inside the "
-                        f"explicit {sector} direction gate")
+                    raise DirectionGateEmptyError(sector)
                 allowed = sector_allowed
                 direction_gate = {
                     "active": True, "sector": sector,
                     "reason": (
+                        "an in-place turn already faced the commanded side; "
+                        "the rest of the clause is limited to the three "
+                        "forward views of the turned heading"
+                        if sector == "forward" else
                         "compound turn keeps a forward/45-degree route ray as "
                         "a legal competitor while preserving turn-side views"
                         if self._stage1_turn_soft and sector in {"left", "right"}
