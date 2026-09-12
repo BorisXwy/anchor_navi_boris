@@ -2120,3 +2120,44 @@
   含按优先级 / 有效性排序的改进措施（M1–M8，全部尚未实施、尚未验证）。
 - 本轮不构成任何候选的冻结依据；上一批改动（`272c223`、`2a3dbd9`、停滞早停、步数预算 40、action-reversal）
   仍未做固定十 EP 同轮回归。
+
+## 候选改动记录（未冻结）— M1：STOP_WAIT 完成条件去掉运动状态（2026-09-12）
+
+- 依据：`docs/e2e_eval_reports/20260911_235744_opennav100_aligned_actrev/failure_analysis_95_plain_zh.md` 病根 B / 措施 M1。
+  拆解器给 STOP_WAIT 写的 cue 是「已停下 / 静止 / 占满前视图 / 紧贴」，判定器以「动作记录以 move_forward 结尾、still moving」
+  为由判 unknown，而任务级 STOP 只在判 completed 之后才发——98 次 STOP_WAIT 判定 86 次 unknown，② 组 9 条人在 3 m 圈内不 STOP。
+- 改动（只动两段 prompt 与其版本化，不动控制逻辑、封锁规则、执行器）：
+  - `vlm_harness.py` 新增 `DECOMPOSITION_PROMPT_VERSIONS = {v1_baseline, v2_relation_only_completion}` 与
+    `RGB_ONLY_COMPLETION_PROMPT_VERSIONS = {v1_baseline, v2_form_aware_stop_relation}`；v1 文本与本轮 100 条存档 prompt
+    逐字节一致（对 58 次首轮判定调用与拆解调用逐一复核）。harness 默认 v1；`habitat_point_navigation.py` /
+    `evaluate_point_navigation.py` / `run_end_to_end_eval.py` 新增 `--decomposition-prompt-version`、
+    `--rgb-only-completion-prompt-version`，CLI 默认 v2。
+  - 拆解 v2：加「Completion wording rule」（cue 必须是单张全景可核对的空间关系，禁止 stationary/stopped/waiting 等运动状态与
+    fills the view/immediately adjacent 等极近距离，改写成约一到两个身位的安全停车距离）；`validate` 加词法校验
+    （`MOTION_STATE_CUE_PATTERN` / `EXTREME_PROXIMITY_CUE_PATTERN`，只查 `completion_cue`/`visual_arrival_evidence`），命中即报错重问，
+    重试耗尽则用本 stage 的 landmark + spatial_relation 模板替换并记 `metadata.completion_wording_repair`，不崩溃。
+  - 判定 v2：`ACTIVE/FOLLOWING SUB-INSTRUCTION` 只渲染 11 个语义字段（去掉 `point_selection_strategy` 的 "then emit stop"、
+    `metadata`、`source_clause`）；首段 "blocked/stationary" 改为 "obstructed"；新增全 form 的 `MOTION-STATE RULE`
+    与仅 STOP_WAIT（含 secondary）的 `STOP_WAIT RULE`（只判同一地标实例是否处于指令关系、约一到两个身位；cue 里的 stop/wait
+    视为已满足；相似物/远处一瞥/隔门/滑到后方 = unknown）。判定端无新的确定性闸门。
+  - manifest `instruction_completion_judge.prompt_version` 改记真正生效的 RGB-only 版本；旧的
+    `--instruction-completion-prompt-version` 在 rgb-only 路径上只决定 6/8 视图采集，manifest 改名 `view_capture_gate_flag`。
+  - 新工具 `scripts/replay_rgb_only_judge_round.py`：用轮次目录里存档的判定 prompt 与三张 contact sheet 离线重放另一版本
+    prompt（可选用新拆解器替换最后一段 cue），隐藏几何只用于给 CSV 贴距离标签。
+- 已实际运行并通过：`python -m unittest discover -s tests -p 'test_*.py'` 390 个全部通过（新增
+  `tests/test_decomposition_prompt_versions.py` 9 例、`test_rgb_only_edge_judge.py` +5、`test_end_to_end_runner.py` +1）；
+  EP0 heuristic 后端单 hop GPU 冒烟（12 步预算，`instruction_decomposition.json`/manifest 记录 v2 版本，拆解 prompt 含新规则）。
+- 已实际运行的离线回放（DeepSeek，本轮真实状态，② 组 9 条 + ④ 组 9 条最后一段的全部 58 次判定，
+  `outputs/replay/m1_judge_v2_only/`、`outputs/replay/m1_judge_v2_decomp_v2/`）：
+  - 判词里提到 still moving / stationary / stopped / ends with / motion score 的次数 16 → 1；拆解 v2 的 cue 全部改成地标关系
+    （1106 的 evidence 仍写 "occupying a significant portion of the forward view"，回放后已把该短语补进正则）。
+  - 圈内（≤3 m）STOP_WAIT 跳判 completed：0/28 → 3/28（两臂相同）；对应 episode：仅判定 v2 = 7、526、1106，判定 v2 + 拆解 v2 =
+    7、526、810——按「首个圈内 completed 即 STOP」估计 **+3 局**（9 条圈内里的 3 条），低于报告估的 +7～9。
+  - 圈外（>3 m）判 completed：9/30 → 7/30；④ 组 9 个错误 STOP 里 140（16 m）、586（3.3 m）改判 unknown，其余 7 个仍 completed
+    （403/454/469/546/755/1056/1139，6–13 m）——这是「画面里有同类地标就点头」的假阳性，属 M5，M1 不解决。
+  - 剩下 25 个圈内 unknown 的判词已不再涉及运动状态，全部是地标关系判断：810（0.09 m）判「仍在卧室内」（EXIT 边界的保守，病根 D）、
+    259「白地毯只在画面底边」（站在地面地标上时它在脚下，只露底边——候选规则：地面型地标 at/on 关系接受底边大块贴近）、
+    1106「冰箱不在当前视野」、362「左侧开门不可辨认」。这些留给 M5/M6，不在 M1 里追。
+- 尚未验证：固定十 EP 同轮回归（`bash run_e2e_eval.sh 0,3,6,9,18,27,45,126,204,219 --workers 2 --backtrack-method action-reversal
+  --run-tag m1_stop_wait`，新 flag 已是默认）与 100 条复跑；按 §16 未回归前本候选不得视为冻结配置。独立复核器
+  `verify_round_stage_completions.py` 仍读同一份 cue 并带运动摘要、无 STOP_WAIT 规则，对 STOP_WAIT 的复核口径未随 M1 更新（记入 M5）。

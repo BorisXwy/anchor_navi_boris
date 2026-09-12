@@ -196,6 +196,8 @@
 
 **HeuristicBackend（假 VLM，只给测试用）怎么拆**（第 1039-1050 行）：它不懂语义，只是按句号/问号/感叹号和单词 `then` 切一刀，每段 `landmark="unspecified"`，其它字段填固定的套话。所以用 heuristic 后端时，"Enter the kitchen and walk along the counter, then stop." 会先被它切成两段（`and` 不切），然后靠下面 1.1.7 情况 1 的规则再补一刀。
 
+**2026-09-12 补记：拆解 prompt 有了版本号（M1，`failure_analysis_95_plain_zh.md` 病根 B）。** 上面引用的正文是 `v1_baseline`，由 `NavigationVLMHarness.render_decomposition_prompt(version, instruction)` 渲染，构造参数 `decomposition_prompt_version` 选版本（CLI `--decomposition-prompt-version`，三个评测入口默认 `v2_relation_only_completion`，harness 自身默认 v1；`instruction_decomposition.json` 顶层新增 `decomposition_prompt_version`，走 `--decomposition-artifact` 复用冻结产物时记 `null`）。`v2` 只在"落地规则"之后多插一段 **Completion wording rule**：`completion_cue`/`visual_arrival_evidence` 必须是一张全景就能核对的"世界状态"（相机与地标的空间关系），不能是"机器人的运动状态"——因为判定器只看 RGB 和自己发过的动作命令，而任务级 STOP 只在判定通过之后才发，所以任何"已停下 / 静止 / 等待中"的 cue 在线上永远满足不了；同样禁止"占满画面 / 触手可及 / 紧贴"这种单张全景无法安全核对的极近距离，改写成"约一到两个身位的安全停车距离"。`validate` 在 v2 下多一道**词法校验**（模块级 `MOTION_STATE_CUE_PATTERN` / `EXTREME_PROXIMITY_CUE_PATTERN`，只查这两个字段，不查指令原文和 `landmark`）：前两次命中就以 `ValueError` 走上面的"接错误原因重问"流程；第三次（重试耗尽）仍命中则**不再报错**，把该字段替换成只由本 stage 自己的 `landmark` 与 `spatial_relation` 拼出的模板句，并在 stage 里写 `completion_wording_repair`（经 `from_mapping` 落到 `metadata`），这样措辞问题不会像 v1 那样让整个 episode 崩掉。
+
 ### 1.1.5 第二步：规则分句器怎么切（`instruction_taxonomy.py:9-13, 160-161`）
 
 不管 VLM 拆没拆，每一段文字都会再过一遍确定性分句器 `split_instruction`。它只在以下四种位置切：
@@ -1149,6 +1151,8 @@ if status == "completed" and not sanitized_actions:
 ```
 
 **空动作边不能算完成**——如果这条边上一步动作记录都没有（理论情况，正常边至少有若干前进/转弯记录），VLM 却说完成了，代码强行把它压成 unknown、置信度封顶 0.49。这是当前 `judge_edge_instruction_completion_rgb_only` 里**唯一**的确定性闸门，和旧类里十几条按类型（PASS/BETWEEN/STOP_WAIT/TURN_TO_LANDMARK…）写的闸门完全不是一回事，作用范围也小得多——它只管"有没有发生过至少一次动作"，不管方向对不对、地标在哪个方位。
+
+**2026-09-12 补记：这段 prompt 有了版本号（M1，对应 `failure_analysis_95_plain_zh.md` 病根 B）。** 上面第五步引用的文本是 `v1_baseline`。prompt 拼装抽成了纯函数 `NavigationVLMHarness.render_rgb_only_completion_prompt(version, item, following, action_summary, previous_semantics, current_semantics)`，由构造参数 `rgb_only_completion_prompt_version` 选版本（CLI `--rgb-only-completion-prompt-version`，三个评测入口默认 `v2_form_aware_stop_relation`，harness 自身默认仍是 v1；manifest 的 `instruction_completion_judge.prompt_version` 从此记的是这个版本，而 `--instruction-completion-prompt-version` 在 rgb-only 路径上只决定 6/8 视图采集，manifest 里改名为 `view_capture_gate_flag`）。`v2` 相对 `v1` 的三处差异：(1) `ACTIVE`/`FOLLOWING SUB-INSTRUCTION` 只渲染 11 个语义字段，去掉了 `point_selection_strategy`（其中 `"arrival": "... then emit stop"`）、`metadata`、`source_clause`；两个标记行与 `sub_instruction_id/form/*_command_count` 键不变，`analyze_judge_round.parse_judge_prompt` 对两个版本都能解析；(2) 首段的 "blocked/stationary" 改成 "obstructed (forward commands with no visible scene change)"；(3) 在 detector evidence 之后插入对所有 form 生效的 `MOTION-STATE RULE`（任务级 STOP 只在判 completed 之后才发，所以动作记录必然以移动命令结尾，这不是未完成的证据），以及仅当 `form == STOP_WAIT` 或 `secondary_forms` 含 STOP_WAIT 时插入的 `STOP_WAIT RULE`（只判当前全景里同一地标实例是否处于指令要求的关系、约一到两个身位的停车距离；cue 里提到 stop/wait/stationary 的部分视为已满足；不要求占满画面或触手可及；地标不可辨认、只是同类相似物、只隔着门看见、或从前/侧扇区滑到后方即 unknown）。判定端没有新的确定性闸门。配套的拆解 prompt 版本见 1.1.4 的补记，离线回放工具见 `scripts/replay_rgb_only_judge_round.py`。
 
 ### 6.1.5 转弯类子指令怎么被判卷看见（`git show 2a3dbd9`，2026-09-11 当天修的 bug）
 
