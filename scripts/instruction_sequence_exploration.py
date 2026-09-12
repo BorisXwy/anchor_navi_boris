@@ -861,6 +861,10 @@ class InstructionSequenceStateMachine:
         self.off_sequence_nodes = []
         self.pending_block = None
         self.blocked_yaws_by_verified_node: dict[str, list[float]] = {}
+        # Subset of the blocks above that were confirmed by the completion
+        # judge; only these count toward ``max_blocked_directions_per_node``.
+        self.judge_blocked_yaws_by_verified_node: dict[str, list[float]] = {}
+        self.in_place_turn_records_by_sub_instruction_id: dict[int, dict] = {}
         self.classification_history = []
         self.recovery_backtracks = 0
         self.consecutive_on_route_unknowns = 0
@@ -893,12 +897,22 @@ class InstructionSequenceStateMachine:
                           self.last_verified_node_id)
         return list(self.blocked_yaws_by_verified_node.get(selection_base, []))
 
-    def _add_block(self, node_id, yaw):
-        values = self.blocked_yaws_by_verified_node.setdefault(str(node_id), [])
+    @staticmethod
+    def _append_unique_yaw(values, yaw):
         if not any(abs(_wrap_angle(yaw - value)) < math.radians(20)
                    for value in values):
             values.append(float(yaw))
-        if len(values) >= self.max_blocked_directions_per_node:
+
+    def _add_block(self, node_id, yaw, *, counts_toward_cap=True):
+        node_key = str(node_id)
+        self._append_unique_yaw(
+            self.blocked_yaws_by_verified_node.setdefault(node_key, []), yaw)
+        if not counts_toward_cap:
+            return
+        cap_values = self.judge_blocked_yaws_by_verified_node.setdefault(
+            node_key, [])
+        self._append_unique_yaw(cap_values, yaw)
+        if len(cap_values) >= self.max_blocked_directions_per_node:
             self.terminated_reason = "all_candidate_directions_blocked_at_verified_node"
 
     def block_failed_physical_direction(self, yaw):
@@ -909,13 +923,23 @@ class InstructionSequenceStateMachine:
         the identical verified state and may choose the same unreachable ray
         until the global hop limit.  This records only the online attempted
         direction; it does not infer semantic correctness or use a reference
-        trajectory.
+        trajectory.  A physical failure says the chosen point was unreachable,
+        not that the semantic direction is wrong, so it is hard-excluded but
+        does not consume the judge-driven block cap.
         """
         selection_base = (self.branch_origin_node_id
                           if self.off_sequence_nodes else
                           self.last_verified_node_id)
-        self._add_block(selection_base, float(yaw))
+        self._add_block(selection_base, float(yaw), counts_toward_cap=False)
         return str(selection_base)
+
+    def in_place_turn_record(self, sub_instruction_id):
+        return self.in_place_turn_records_by_sub_instruction_id.get(
+            int(sub_instruction_id))
+
+    def record_in_place_turn(self, sub_instruction_id, record):
+        self.in_place_turn_records_by_sub_instruction_id[
+            int(sub_instruction_id)] = dict(record)
 
     def observe(self, node_id, classification, selected_yaw):
         node_id = str(node_id)
@@ -1071,10 +1095,16 @@ class InstructionSequenceStateMachine:
             # that identity hand-off.  Copying only the latest failed yaw
             # forgets all earlier trials and can cycle through them until the
             # global hop budget is exhausted.
+            judge_yaws = self.judge_blocked_yaws_by_verified_node.get(
+                failed_origin, [])
             for blocked_yaw in list(
                     self.blocked_yaws_by_verified_node.get(
                         failed_origin, [])):
-                self._add_block(recovered, blocked_yaw)
+                self._add_block(
+                    recovered, blocked_yaw,
+                    counts_toward_cap=any(
+                        abs(_wrap_angle(blocked_yaw - value)) < 1e-9
+                        for value in judge_yaws))
         self.last_verified_node_id = recovered
         # B already consumed the one promised lookahead when B->C returned a
         # second UNKNOWN.  A physical revisit creates a new graph id for B,
@@ -1105,6 +1135,12 @@ class InstructionSequenceStateMachine:
             "blocked_yaws_by_verified_node": {
                 node_id: list(values) for node_id, values in
                 self.blocked_yaws_by_verified_node.items()},
+            "judge_blocked_yaws_by_verified_node": {
+                node_id: list(values) for node_id, values in
+                self.judge_blocked_yaws_by_verified_node.items()},
+            "in_place_turn_records_by_sub_instruction_id": {
+                int(key): dict(value) for key, value in
+                self.in_place_turn_records_by_sub_instruction_id.items()},
             "classification_history": list(self.classification_history),
             "recovery_backtracks": self.recovery_backtracks,
             "consecutive_on_route_unknowns": (

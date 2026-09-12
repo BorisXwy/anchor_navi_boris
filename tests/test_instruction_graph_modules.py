@@ -1293,6 +1293,63 @@ class InstructionGraphModuleTest(unittest.TestCase):
         state.block_failed_physical_direction(1.2 + np.deg2rad(5))
         self.assertEqual(len(state.blocked_yaws()), 1)
 
+    def test_physical_failure_blocks_do_not_consume_the_judge_block_cap(self):
+        sub_instruction = SubInstruction.from_mapping({
+            "sub_instruction_id": 0,
+            "navigation_instruction": "enter the next room",
+            "form": "ENTER_REGION",
+        })
+        state = InstructionSequenceStateMachine(
+            [sub_instruction], initial_node_id="node_0000",
+            max_blocked_directions_per_node=2)
+        wrong = {
+            "belongs_to_sequence": False,
+            "matched_sub_instruction_id": -1,
+            "confidence": 0.8,
+            "unknown_disposition": "wrong",
+        }
+        state.observe("node_0001", wrong, selected_yaw=-0.5)
+        state.block_failed_physical_direction(0.0)
+        state.block_failed_physical_direction(math.pi / 2)
+        state.block_failed_physical_direction(math.pi)
+        self.assertEqual(len(state.blocked_yaws()), 3)
+        self.assertIsNone(state.terminated_reason)
+        self.assertEqual(
+            state.judge_blocked_yaws_by_verified_node.get("node_0001", []), [])
+
+        state.observe("node_0002", wrong, selected_yaw=-0.5)
+        state.on_backtrack(success=True, current_node_id="node_0003")
+        self.assertIsNone(state.terminated_reason)
+        # The physical blocks are inherited by the revisit node but still do
+        # not count; only the second judge-confirmed block trips the cap.
+        self.assertEqual(len(state.blocked_yaws()), 4)
+        self.assertEqual(
+            len(state.judge_blocked_yaws_by_verified_node["node_0003"]), 1)
+        state.observe("node_0004", wrong, selected_yaw=-1.5)
+        state.on_backtrack(success=True, current_node_id="node_0005")
+        self.assertEqual(
+            state.terminated_reason,
+            "all_candidate_directions_blocked_at_verified_node")
+        snapshot = state.snapshot()
+        self.assertIn("judge_blocked_yaws_by_verified_node", snapshot)
+        self.assertEqual(snapshot["in_place_turn_records_by_sub_instruction_id"], {})
+
+    def test_in_place_turn_record_is_kept_per_sub_instruction(self):
+        sub_instruction = SubInstruction.from_mapping({
+            "sub_instruction_id": 3,
+            "navigation_instruction": "turn left",
+            "form": "TURN_LEFT",
+        })
+        state = InstructionSequenceStateMachine(
+            [sub_instruction], initial_node_id="node_0000")
+        self.assertIsNone(state.in_place_turn_record(3))
+        state.record_in_place_turn(3, {"sector": "left", "hop_index": 1})
+        self.assertEqual(state.in_place_turn_record(3)["sector"], "left")
+        self.assertIsNone(state.in_place_turn_record(4))
+        self.assertEqual(
+            state.snapshot()["in_place_turn_records_by_sub_instruction_id"],
+            {3: {"sector": "left", "hop_index": 1}})
+
     def test_bare_turn_alignment_excludes_compound_destination_clauses(self):
         self.assertAlmostEqual(bare_turn_delta_rad({
             "form": "TURN_LEFT", "navigation_instruction": "Turn left."
