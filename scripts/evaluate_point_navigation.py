@@ -379,6 +379,10 @@ def main():
         default="v2_form_aware_stop_relation")
     parser.add_argument(
         "--tracking-cluster-profile", default="rgb_only_dense_stop_v1")
+    parser.add_argument("--arrival-coast-steps", type=int, default=None,
+                        help="None = tracking profile value (3 for rgb-only)")
+    parser.add_argument("--stall-recovery-probes", type=int, default=None,
+                        help="None = tracking profile value (2 for rgb-only)")
     parser.add_argument("--deepseek-env", type=Path, default=ROOT / ".env.deepseek")
     parser.add_argument("--deepseek-base-url", default=None)
     parser.add_argument("--vlm-timeout", type=int, default=180)
@@ -445,6 +449,8 @@ def main():
         "rgb_only_completion_prompt_version": (
             args.rgb_only_completion_prompt_version),
         "tracking_cluster_profile": args.tracking_cluster_profile,
+        "arrival_coast_steps": args.arrival_coast_steps,
+        "stall_recovery_probes": args.stall_recovery_probes,
         "policy_input_contract": "rgb_only_v1",
         "policy_observations": ["rgb", "commanded_action_history"],
         "privileged_geometry_scope": "postrun_evaluation_only",
@@ -516,6 +522,11 @@ def main():
                 "--rgb-only-completion-prompt-version",
                 args.rgb_only_completion_prompt_version,
                 "--tracking-cluster-profile", args.tracking_cluster_profile,
+                *([] if args.arrival_coast_steps is None else
+                  ["--arrival-coast-steps", str(args.arrival_coast_steps)]),
+                *([] if args.stall_recovery_probes is None else
+                  ["--stall-recovery-probes",
+                   str(args.stall_recovery_probes)]),
                 "--seed", str(args.seed),
                 "--sequence-max-exploration-hops",
                 str(args.sequence_max_exploration_hops),
@@ -845,6 +856,8 @@ def main():
         "rgb_only_completion_prompt_version": (
             args.rgb_only_completion_prompt_version),
         "tracking_cluster_profile": args.tracking_cluster_profile,
+        "arrival_coast_steps": args.arrival_coast_steps,
+        "stall_recovery_probes": args.stall_recovery_probes,
         "seed": args.seed,
         "vlm_timeout": args.vlm_timeout,
         "vlm_retries": args.vlm_retries,

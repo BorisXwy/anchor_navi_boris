@@ -18,13 +18,15 @@ from audit_rgb_only_contract import _violations  # noqa: E402
 from evaluate_point_navigation import termination_category  # noqa: E402
 from instruction_decomposer import SubInstruction  # noqa: E402
 from navigation_graph_memory import NavigationGraphMemory  # noqa: E402
-from point_navigation_executor import PointNavigationResult  # noqa: E402
+from point_navigation_executor import (  # noqa: E402
+    REVERSAL_SKIP_KEY, PointNavigationResult,
+)
 from point_selectors import PointSelectionResult  # noqa: E402
 from rgb_only_instruction_sequence import (  # noqa: E402
     ACTION_REVERSAL_REPLAY_PHASE, ACTION_REVERSAL_RESTORE_HEADING_PHASE,
     ACTION_REVERSAL_TURN_AROUND_PHASE, RGBOnlyActionReversalBacktracker,
     RGBOnlyBacktrackResult, RGBOnlyInstructionSequenceExplorationStrategy,
-    plan_action_reversal, turn_around_action_count,
+    count_reversal_skips, plan_action_reversal, turn_around_action_count,
 )
 from rgb_only_runtime import RGBOnlyPolicySimulator  # noqa: E402
 from vlm_harness import (  # noqa: E402
@@ -279,6 +281,31 @@ class ActionReversalPlanTests(unittest.TestCase):
                 raw.step(record["action"])
             self.assertEqual(raw.grid_xy, [0, 0], letters)
             self.assertEqual(raw.heading_units, 3, letters)
+
+    def test_tagged_no_motion_forwards_are_not_replayed(self):
+        # Lower-case letters are forwards the executor tagged as stalled:
+        # the fake wall swallows them on the way out, so replaying them on
+        # the way back would overshoot the origin.
+        raw = GridPoseFakeRawSimulator()
+        for letters in ("FFfffRFLF", "LLFfffRRfff", "fff", "FRfLf"):
+            raw.grid_xy = [0, 0]
+            raw.heading_units = 3
+            history = action_records(letters.upper())
+            for record, letter in zip(history, letters):
+                if letter == "f":
+                    record["stall_forward_streak"] = 1
+                    record[REVERSAL_SKIP_KEY] = "forward_stall"
+                else:
+                    raw.step(record["action"])
+            plan = plan_action_reversal(history, TURN_STEP_DEG)
+            replay = [item["action"] for item in plan
+                      if item["phase"] == ACTION_REVERSAL_REPLAY_PHASE]
+            self.assertEqual(len(replay), len(letters) - letters.count("f"))
+            for record in plan:
+                raw.step(record["action"])
+            self.assertEqual(raw.grid_xy, [0, 0], letters)
+            self.assertEqual(raw.heading_units, 3, letters)
+        self.assertEqual(count_reversal_skips(history), 2)
 
 
 class ActionReversalStrategyTests(unittest.TestCase):

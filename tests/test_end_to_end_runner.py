@@ -197,6 +197,24 @@ class SelectionAndShardingTest(EndToEndRunnerFixture):
             runner.shard_command(
                 Path("/x/e.py"), [0], Path("/out"), "cuda:0", defaults, [])))
 
+    def test_walking_layer_flags_reach_the_shard_command(self):
+        args = runner.build_parser().parse_args([
+            "7", "--arrival-coast-steps", "0", "--stall-recovery-probes", "1"])
+        options = runner.run_options_from_args(args)
+        joined = " ".join(runner.shard_command(
+            Path("/x/evaluate_point_navigation.py"), [0], Path("/out/shard_0"),
+            "cuda:0", options, []))
+        self.assertIn("--arrival-coast-steps 0", joined)
+        self.assertIn("--stall-recovery-probes 1", joined)
+        defaults = runner.run_options_from_args(
+            runner.build_parser().parse_args(["7"]))
+        self.assertIsNone(defaults["arrival_coast_steps"])
+        self.assertIsNone(defaults["stall_recovery_probes"])
+        joined = " ".join(runner.shard_command(
+            Path("/x/e.py"), [0], Path("/out"), "cuda:0", defaults, []))
+        self.assertNotIn("--arrival-coast-steps", joined)
+        self.assertNotIn("--stall-recovery-probes", joined)
+
 
 class MergeTest(EndToEndRunnerFixture):
     def test_merge_keeps_unscored_and_not_run_episodes_explicit(self):

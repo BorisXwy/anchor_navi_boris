@@ -742,6 +742,19 @@ def _run_habitat_episode(argv=None):
         help=("point-executor navigation/arrival cluster density and "
               "visibility confirmation profile"))
     p.add_argument("--edge-keyframe-count", type=int, default=5)
+    p.add_argument(
+        "--arrival-coast-steps", type=int, default=None,
+        help=("extra forward commands after the stop cluster leaves the frame "
+              "on portal-crossing forms (EXIT/ENTER/TRAVERSE_PORTAL/"
+              "SELECT_PORTAL); default = tracking profile value "
+              "(rgb_only_dense_stop_v1: 3), 0 restores the immediate stop"))
+    p.add_argument(
+        "--stall-recovery-probes", type=int, default=None,
+        help=("after a forward stall, turn 30deg in place (alternating "
+              "left/right) and retry the same target up to this many times "
+              "before ending the hop; default = tracking profile value "
+              "(rgb_only_dense_stop_v1: 2), 0 restores the immediate stall "
+              "stop"))
     p.add_argument("--views", type=int, choices=[6, 8], default=8)
     p.add_argument("--forward-step", type=float, default=0.22)
     p.add_argument("--turn-step-deg", type=float, default=15.0)
@@ -1342,7 +1355,9 @@ def _run_habitat_episode(argv=None):
         max_steps=args.max_steps_per_target, forward_step=args.forward_step,
         turn_step_deg=args.turn_step_deg, seed=args.seed,
         tracking_cluster_profile=args.tracking_cluster_profile,
-        edge_keyframe_count=args.edge_keyframe_count)
+        edge_keyframe_count=args.edge_keyframe_count,
+        arrival_coast_forward_steps=args.arrival_coast_steps,
+        stall_recovery_max_probes=args.stall_recovery_probes)
     if args.mode == "pure-exploration":
         selection_strategy = RandomExplorationPointSelector(
             segmenter=segmenter, video_composer=video_composer,

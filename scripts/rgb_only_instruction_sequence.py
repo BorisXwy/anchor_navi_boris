@@ -29,7 +29,7 @@ from instruction_sequence_exploration import (
 )
 from navigation_graph_memory import CompactVisualEmbedder
 from point_navigation_executor import (
-    PointNavigationRequest, execute_point_navigation,
+    REVERSAL_SKIP_KEY, PointNavigationRequest, execute_point_navigation,
 )
 from point_selectors import (
     PointSelectionRequest, continuous_turn, observe, observe_eight_rgb,
@@ -363,10 +363,19 @@ def plan_action_reversal(action_history, turn_step_deg):
         if action not in _REVERSED_ACTION:
             raise ValueError(
                 f"cannot reverse unknown action {action!r} in action history")
+        # A forward the executor tagged as producing no RGB motion never
+        # moved the agent; replaying it would walk the return leg too far.
+        if record.get(REVERSAL_SKIP_KEY):
+            continue
         append(_REVERSED_ACTION[action], ACTION_REVERSAL_REPLAY_PHASE)
     for _ in range(turn_count):
         append("turn_left", ACTION_REVERSAL_RESTORE_HEADING_PHASE)
     return plan
+
+
+def count_reversal_skips(action_history):
+    return sum(1 for record in action_history
+               if dict(record).get(REVERSAL_SKIP_KEY))
 
 
 class RGBOnlyActionReversalBacktracker:
@@ -432,6 +441,8 @@ class RGBOnlyActionReversalBacktracker:
             "backtrack_method": self.method,
             "turn_around_actions": self.turn_around_actions,
             "forward_step_count": len(list(forward_action_history)),
+            "skipped_no_motion_forward_count": count_reversal_skips(
+                forward_action_history),
             "action_history": plan,
             "executor_arrived": None,
             "target_panorama_similarity_after": similarity,
@@ -877,6 +888,7 @@ class RGBOnlyInstructionSequenceExplorationStrategy:
                     instruction=sub_instruction.navigation_instruction,
                     full_instruction=self.full_instruction,
                     sub_instruction=sub_instruction.navigation_instruction,
+                    instruction_form=str(stage.get("form", "")).upper() or None,
                     semantic_target=sub_instruction.semantic_spatial_target,
                     target_index=hop_index,
                     stage_count=len(self.sub_instructions),

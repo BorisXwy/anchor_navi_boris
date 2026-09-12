@@ -125,6 +125,12 @@ def build_request(raw_sim):
         target_index=0, global_step=0, policy_input_contract="rgb_only_v1")
 
 
+# These tests pin the pre-M4 behaviour (a stall ends the hop at once); the
+# in-place probe that now runs first is covered by
+# test_rgb_only_executor_recovery.py.
+NO_PROBES = {"stall_recovery_max_probes": 0}
+
+
 class RGBOnlyExecutorStallTests(unittest.TestCase):
     def test_profile_declares_stall_rule(self):
         profile = TRACKING_CLUSTER_PROFILES["rgb_only_dense_stop_v1"]
@@ -133,7 +139,7 @@ class RGBOnlyExecutorStallTests(unittest.TestCase):
 
     def test_identical_frames_after_forward_end_hop_as_stall(self):
         raw = RGBOnlyFakeSimulator(blocked_after=0)
-        executor = build_executor(raw, max_steps=40)
+        executor = build_executor(raw, max_steps=40, profile_overrides=NO_PROBES)
         result = executor.execute(build_request(raw))
         frames = int(executor.cluster_config["stall_forward_frames"])
 
@@ -165,7 +171,7 @@ class RGBOnlyExecutorStallTests(unittest.TestCase):
 
     def test_stall_only_after_real_travel_stops(self):
         raw = RGBOnlyFakeSimulator(blocked_after=4)
-        executor = build_executor(raw, max_steps=40)
+        executor = build_executor(raw, max_steps=40, profile_overrides=NO_PROBES)
         result = executor.execute(build_request(raw))
         frames = int(executor.cluster_config["stall_forward_frames"])
 
@@ -193,7 +199,7 @@ class RGBOnlyExecutorStallTests(unittest.TestCase):
         # straight heading does not.
         executor = build_executor(
             raw, max_steps=40, predict_fn=alternating_predict(state),
-            profile_overrides={"turn_deadband_deg": 5.0})
+            profile_overrides={"turn_deadband_deg": 5.0, **NO_PROBES})
         result = executor.execute(build_request(raw))
         frames = int(executor.cluster_config["stall_forward_frames"])
 

@@ -380,6 +380,8 @@ def build_parser():
     run.add_argument("--sequence-max-exploration-hops", type=int, default=None)
     run.add_argument("--backtrack-method", choices=["action-reversal", "visual"],
                      default=None)
+    run.add_argument("--arrival-coast-steps", type=int, default=None)
+    run.add_argument("--stall-recovery-probes", type=int, default=None)
     run.add_argument("--point-selection-prompt-version", default=None)
     run.add_argument("--instruction-completion-prompt-version", default=None)
     run.add_argument("--decomposition-prompt-version", default=None)
@@ -411,6 +413,8 @@ def run_options_from_args(args):
         "targets": args.targets,
         "sequence_max_exploration_hops": args.sequence_max_exploration_hops,
         "backtrack_method": args.backtrack_method,
+        "arrival_coast_steps": args.arrival_coast_steps,
+        "stall_recovery_probes": args.stall_recovery_probes,
         "point_selection_prompt_version": args.point_selection_prompt_version,
         "instruction_completion_prompt_version": (
             args.instruction_completion_prompt_version),

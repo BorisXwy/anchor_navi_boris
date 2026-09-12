@@ -7922,6 +7922,13 @@ semantic spatial relation is UNKNOWN. Return JSON only."""
                     "orientation_only", "phase",
                 }
             })
+        # Stall-recovery probes are obstacle wiggles with ~zero net rotation;
+        # they must not read as evidence that a turn instruction was executed.
+        probe_turns = [item for item in sanitized_actions
+                       if str(item.get("phase")) == "stall_recovery_probe"
+                       and str(item.get("action")) != "move_forward"]
+        steering_actions = [item for item in sanitized_actions
+                            if item not in probe_turns]
         action_summary = {
             "control_steps": len(sanitized_actions),
             "forward_command_count": sum(
@@ -7929,10 +7936,11 @@ semantic spatial relation is UNKNOWN. Return JSON only."""
                 for item in sanitized_actions),
             "left_turn_command_count": sum(
                 str(item.get("action")) == "turn_left"
-                for item in sanitized_actions),
+                for item in steering_actions),
             "right_turn_command_count": sum(
                 str(item.get("action")) == "turn_right"
-                for item in sanitized_actions),
+                for item in steering_actions),
+            "stall_recovery_turn_command_count": len(probe_turns),
             "chronological_actions": sanitized_actions,
             "measurement_note": (
                 "Commands and RGB-change scores only; no pose, metric "

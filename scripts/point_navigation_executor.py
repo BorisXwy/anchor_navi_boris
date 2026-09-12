@@ -507,7 +507,28 @@ TRACKING_CLUSTER_PROFILES["rgb_only_dense_stop_v1"] = {
     # has a 5th percentile of 12.3; T=8/K=3 fired 16 times with no false stop.
     "stall_motion_threshold": 8.0,
     "stall_forward_frames": 3,
+    # After a stall, turn in place by this angle (alternating left/right)
+    # and resume servoing to the same target instead of ending the hop; the
+    # hop ends as a stall only once every probe has stalled again.  0 probes
+    # restores the immediate stall stop.
+    "stall_recovery_turn_deg": 30.0,
+    "stall_recovery_max_probes": 2,
+    # Portal-crossing forms: after the dense stop cluster leaves the bottom
+    # edge (about 0.9 m short of the point) keep walking this many commands,
+    # stopping early on the first no-motion frame.  Other forms coast 0.
+    "arrival_coast_forward_steps": 3,
 }
+
+# Instruction forms whose arrival means "beyond the portal plane"; the stop
+# cluster leaving the crop bottom still leaves the camera on the near side.
+ARRIVAL_COAST_FORMS = frozenset({
+    "EXIT_REGION", "ENTER_REGION", "TRAVERSE_PORTAL_REGION", "SELECT_PORTAL",
+})
+ARRIVAL_COAST_PHASE = "arrival_coast"
+STALL_RECOVERY_PROBE_PHASE = "stall_recovery_probe"
+# Marker on a commanded ``move_forward`` that produced no RGB motion: action
+# reversal must not replay it, otherwise the return leg overshoots.
+REVERSAL_SKIP_KEY = "reversal_skip"
 
 
 def snap_points_to_mask(points, mask):
@@ -782,6 +803,9 @@ class PointNavigationRequest:
     # that do not provide a decomposition.
     full_instruction: Optional[str] = None
     sub_instruction: Optional[str] = None
+    # Upper-case R2R form of the sub-instruction (instruction_taxonomy).  It
+    # only selects the arrival-coast rule; it carries no geometry.
+    instruction_form: Optional[str] = None
     semantic_target: str = "selected point"
     target_index: int = 0
     stage_count: int = 1
@@ -850,7 +874,8 @@ class PointNavigationExecutor:
             video_sink=None, video_composer=None, max_steps=14,
             forward_step=0.22, turn_step_deg=15.0, seed=17,
             tracking_cluster_profile="legacy_3x3", edge_keyframe_count=5,
-            arrival_tracker=None):
+            arrival_tracker=None, arrival_coast_forward_steps=None,
+            stall_recovery_max_probes=None):
         self.sim = sim
         self.tracker = tracker
         self.arrival_tracker = arrival_tracker
@@ -873,6 +898,12 @@ class PointNavigationExecutor:
         self.tracking_cluster_profile = str(tracking_cluster_profile)
         self.cluster_config = dict(
             TRACKING_CLUSTER_PROFILES[self.tracking_cluster_profile])
+        if arrival_coast_forward_steps is not None:
+            self.cluster_config["arrival_coast_forward_steps"] = max(
+                0, int(arrival_coast_forward_steps))
+        if stall_recovery_max_probes is not None:
+            self.cluster_config["stall_recovery_max_probes"] = max(
+                0, int(stall_recovery_max_probes))
         self.edge_keyframe_count = max(2, int(edge_keyframe_count))
         if self.output_dir is not None:
             self.crops_dir = self.output_dir / "goal_crops"
@@ -938,6 +969,100 @@ class PointNavigationExecutor:
                 item["image_path"] = str(path.relative_to(self.output_dir))
             records.append(item)
         return selected, records
+
+    @staticmethod
+    def mark_stalled_forwards(action_history, reason):
+        """Tag the trailing no-motion forwards so reversal skips them.
+
+        Walks back over the current stall streak: forwards with a positive
+        ``stall_forward_streak`` are tagged, turns in between are passed
+        over, and the first forward that really moved ends the walk.
+        """
+        marked = 0
+        for item in reversed(action_history):
+            if item.get("phase") == STALL_RECOVERY_PROBE_PHASE:
+                break
+            if item.get("action") != "move_forward":
+                continue
+            if (int(item.get("stall_forward_streak", 0)) <= 0 or
+                    item.get(REVERSAL_SKIP_KEY)):
+                break
+            item[REVERSAL_SKIP_KEY] = reason
+            marked += 1
+        return marked
+
+    def _rgb_only_action_record(self, step, action, commanded_turn_deg,
+                                motion_score, stall_forward_streak, phase):
+        return {
+            "step": step,
+            "action": action,
+            "commanded_turn_deg": commanded_turn_deg,
+            "forward_commanded": action == "move_forward",
+            "rgb_motion_score": motion_score,
+            "rgb_motion_threshold": float(
+                self.cluster_config["rgb_motion_threshold"]),
+            "stall_forward_streak": stall_forward_streak,
+            "phase": phase,
+            "policy_input_contract": "rgb_only_v1",
+        }
+
+    def _arrival_coast(self, sim, request, rgb, action_heading_rad, step,
+                       global_step, action_history, edge_frames,
+                       edge_frame_metadata, record, stall_motion_threshold):
+        """Walk on after the stop cluster left the frame (portal forms only).
+
+        The dense bottom cluster disappears while the camera is still short
+        of the selected point, which for portal-crossing forms leaves the
+        agent on the near side of the doorway.  Each coast command is a real
+        forward; a no-motion frame ends the coast and tags that command so
+        action reversal does not replay it.
+        """
+        form = str(request.instruction_form or "").upper()
+        requested = (int(self.cluster_config.get(
+            "arrival_coast_forward_steps", 0))
+            if form in ARRIVAL_COAST_FORMS else 0)
+        coast = {
+            "instruction_form": form or None,
+            "requested_steps": requested,
+            "executed_steps": 0,
+            "stopped_by_stall": False,
+            "motion_scores": [],
+        }
+        record["arrival_coast"] = coast
+        for offset in range(requested):
+            observations = sim.step("move_forward")
+            next_rgb = np.asarray(observations["rgb"], np.uint8)[..., :3]
+            motion_score = self._rgb_motion_score(rgb, next_rgb)
+            stalled = motion_score < stall_motion_threshold
+            action_record = self._rgb_only_action_record(
+                step + offset, "move_forward", 0.0, motion_score,
+                1 if stalled else 0, ARRIVAL_COAST_PHASE)
+            if stalled:
+                action_record[REVERSAL_SKIP_KEY] = "arrival_coast_stall"
+            action_history.append(action_record)
+            edge_frames.append(next_rgb.copy())
+            edge_frame_metadata.append({
+                "step": step + offset, "phase": ARRIVAL_COAST_PHASE,
+                "action": "move_forward", "commanded_turn_deg": 0.0,
+                "rgb_motion_score": motion_score,
+                "policy_input_contract": "rgb_only_v1",
+            })
+            frame = cv2.cvtColor(next_rgb, cv2.COLOR_RGB2BGR)
+            cv2.putText(
+                frame, f"RGB COAST {offset + 1}/{requested} motion "
+                f"{motion_score:.1f}", (8, 20), cv2.FONT_HERSHEY_SIMPLEX,
+                0.43, (0, 255, 0), 1)
+            self._append_video(frame, request, None, action_heading_rad,
+                               "rgb_only_arrival_coast")
+            coast["executed_steps"] += 1
+            coast["motion_scores"].append(motion_score)
+            global_step += 1
+            rgb = next_rgb
+            if stalled:
+                coast["stopped_by_stall"] = True
+                break
+        record["extra_physical_actions"] += coast["executed_steps"]
+        return rgb, global_step
 
     @staticmethod
     def _rgb_motion_score(before, after):
@@ -1046,6 +1171,15 @@ class PointNavigationExecutor:
             self.cluster_config.get("stall_motion_threshold", 0.0))
         stall_forward_frames = int(
             self.cluster_config.get("stall_forward_frames", 0))
+        stall_probe_count = 0
+        stall_recovery_turn_deg = float(
+            self.cluster_config.get("stall_recovery_turn_deg", 0.0))
+        stall_recovery_max_probes = int(
+            self.cluster_config.get("stall_recovery_max_probes", 0))
+        stall_probe_turn_count = (
+            max(1, int(round(stall_recovery_turn_deg /
+                             math.degrees(self.turn_limit))))
+            if stall_recovery_turn_deg > 0.0 else 0)
         last_navigation_tracks = None
         last_navigation_visible = None
         record = {
@@ -1085,6 +1219,13 @@ class PointNavigationExecutor:
                 "RGB ego-motion confirmation"),
             "stall_motion_threshold": stall_motion_threshold,
             "stall_forward_frames": stall_forward_frames,
+            "stall_recovery_turn_deg": stall_recovery_turn_deg,
+            "stall_recovery_max_probes": stall_recovery_max_probes,
+            "stall_recovery_probes": [],
+            "arrival_coast": None,
+            # Coast and probe commands are real actions outside the
+            # ``max_steps`` loop budget; bounded by the two profile constants.
+            "extra_physical_actions": 0,
             "steps": [], "end_reason": None, "arrival_signal": None,
             "terminal_navigation_visible_fraction": None,
             "terminal_stop_visible_fraction": None,
@@ -1176,6 +1317,10 @@ class PointNavigationExecutor:
                 self._append_video(
                     terminal_frame, request, None, action_heading_rad,
                     "rgb_only_stop_cluster_arrived")
+                rgb, global_step = self._arrival_coast(
+                    sim, request, rgb, action_heading_rad, local_step,
+                    global_step, action_history, edge_frames,
+                    edge_frame_metadata, record, stall_motion_threshold)
                 break
             if not control_visible.any():
                 record["end_reason"] = "rgb_navigation_cluster_lost"
@@ -1314,7 +1459,75 @@ class PointNavigationExecutor:
             global_step += 1
             rgb = next_rgb
             context.append(Image.fromarray(rgb))
+            if (forward_stalled and stall_probe_turn_count > 0 and
+                    stall_probe_count < stall_recovery_max_probes):
+                # The stalled frame has not been tracked yet (the normal
+                # tracker step sits at the end of the iteration); every
+                # rendered frame gets exactly one tracker step, so track it
+                # here, then track each probe frame, then skip the end step.
+                tracks, visible = self.tracker.step(rgb)
+                if separate_arrival_tracker:
+                    stop_tracks, stop_visible = self.arrival_tracker.step(rgb)
+                marked = self.mark_stalled_forwards(
+                    action_history, "forward_stall")
+                probe_action = ("turn_left" if stall_probe_count % 2 == 0
+                                else "turn_right")
+                probe_turn_deg = (math.degrees(self.turn_limit)
+                                  if probe_action == "turn_left"
+                                  else -math.degrees(self.turn_limit))
+                probe = {
+                    "probe_index": stall_probe_count,
+                    "at_step": local_step,
+                    "action": probe_action,
+                    "turn_commands": stall_probe_turn_count,
+                    "stalled_forwards_marked": marked,
+                    "stall_motion_scores": list(stall_motion_scores),
+                    "probe_motion_scores": [],
+                }
+                for _ in range(stall_probe_turn_count):
+                    observations = sim.step(probe_action)
+                    next_rgb = np.asarray(
+                        observations["rgb"], np.uint8)[..., :3]
+                    motion_score = self._rgb_motion_score(rgb, next_rgb)
+                    action_heading_rad = _wrap_angle(
+                        action_heading_rad + math.radians(probe_turn_deg))
+                    action_history.append(self._rgb_only_action_record(
+                        local_step, probe_action, probe_turn_deg,
+                        motion_score, 0, STALL_RECOVERY_PROBE_PHASE))
+                    edge_frames.append(next_rgb.copy())
+                    edge_frame_metadata.append({
+                        "step": local_step,
+                        "phase": STALL_RECOVERY_PROBE_PHASE,
+                        "action": probe_action,
+                        "commanded_turn_deg": probe_turn_deg,
+                        "rgb_motion_score": motion_score,
+                        "policy_input_contract": "rgb_only_v1",
+                    })
+                    frame = cv2.cvtColor(next_rgb, cv2.COLOR_RGB2BGR)
+                    cv2.putText(
+                        frame, f"RGB STALL PROBE {stall_probe_count + 1} "
+                        f"{probe_action}", (8, 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.43, (0, 165, 255), 1)
+                    self._append_video(
+                        frame, request, None, action_heading_rad,
+                        "rgb_only_stall_recovery_probe")
+                    probe["probe_motion_scores"].append(motion_score)
+                    global_step += 1
+                    rgb = next_rgb
+                    context.append(Image.fromarray(rgb))
+                    tracks, visible = self.tracker.step(rgb)
+                    if separate_arrival_tracker:
+                        stop_tracks, stop_visible = (
+                            self.arrival_tracker.step(rgb))
+                record["stall_recovery_probes"].append(probe)
+                record["extra_physical_actions"] += stall_probe_turn_count
+                stall_probe_count += 1
+                stall_forward_streak = 0
+                stall_motion_scores = []
+                forward_since_turn = 0
+                continue
             if forward_stalled:
+                self.mark_stalled_forwards(action_history, "forward_stall")
                 record["end_reason"] = "rgb_forward_stall"
                 record["terminal_stall_forward_streak"] = stall_forward_streak
                 record["terminal_stall_motion_scores"] = list(

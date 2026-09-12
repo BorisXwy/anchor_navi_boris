@@ -624,6 +624,10 @@ def main():
     parser.add_argument("--backtrack-method",
                         choices=["action-reversal", "visual"],
                         default="action-reversal")
+    parser.add_argument("--arrival-coast-steps", type=int, default=None,
+                        help="None = tracking profile value")
+    parser.add_argument("--stall-recovery-probes", type=int, default=None,
+                        help="None = tracking profile value")
     parser.add_argument("--rerun", action="store_true")
     args = parser.parse_args()
     if args.count < 1:
@@ -689,6 +693,8 @@ def main():
             "max_steps_per_target": args.max_steps_per_target,
             "sequence_max_exploration_hops": args.sequence_max_exploration_hops,
             "backtrack_method": args.backtrack_method,
+            "arrival_coast_steps": args.arrival_coast_steps,
+            "stall_recovery_probes": args.stall_recovery_probes,
             "backtrack_target": "node_0000",
             "backtrack_selector": "vlm",
             "backtrack_planner_profile": args.backtrack_planner_profile,
@@ -740,6 +746,11 @@ def main():
                 "--instruction-completion-prompt-version",
                 args.instruction_completion_prompt_version,
                 "--tracking-cluster-profile", args.tracking_cluster_profile,
+                *([] if args.arrival_coast_steps is None else
+                  ["--arrival-coast-steps", str(args.arrival_coast_steps)]),
+                *([] if args.stall_recovery_probes is None else
+                  ["--stall-recovery-probes",
+                   str(args.stall_recovery_probes)]),
                 "--views", str(args.views),
                 "--device", args.device,
                 "--backtrack-target-node", "node_0000",
