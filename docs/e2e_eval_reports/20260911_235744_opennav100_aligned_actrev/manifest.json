@@ -1,0 +1,1041 @@
+{
+  "schema_version": "e2e_round_manifest_v1",
+  "round_id": "20260911_235744_opennav100_aligned_actrev",
+  "run_tag": "opennav100_aligned_actrev",
+  "created_utc": "2026-09-11T15:57:45.879845+00:00",
+  "resumed_utc": null,
+  "status": "complete",
+  "test_scope": "end_to_end_from_dataset_start",
+  "benchmark": "OpenNav_R2R-CE_100 episode ids on official R2R VLN-CE val_unseen with start_rotation aligned to the opening turn + GT path (data/datasets/opennav100_start_aligned)",
+  "start_pose_source": "aligned",
+  "git": {
+    "commit": "400fbfd85b825657157d4c0a3fb8805c28f083f9",
+    "dirty": false
+  },
+  "dataset_path": "/workspace/anchor_navi_boris/data/datasets/opennav100_start_aligned/val_unseen_opennav100ids_start_aligned.json.gz",
+  "dataset_sha256": "cb20c192f9fafd2ede9af51db6d8f4696c7e7fb06ebbe3c5b5b60f6583a6cf66",
+  "mp3d_root": "/workspace/3d_wm_vln/StreamVLN/data/scene_datasets/mp3d",
+  "episode_selection": {
+    "source": "all",
+    "count": 100,
+    "episodes": [
+      {
+        "episode_id": "7",
+        "episode_index": 0,
+        "trajectory_id": 42,
+        "scene_id": "mp3d/x8F5xyUWy9e/x8F5xyUWy9e.glb",
+        "instruction": "Go straight past the pool. Walk between the bar and chairs.  Stop when you get to the corner of the bar.  That's where you will wait. "
+      },
+      {
+        "episode_id": "11",
+        "episode_index": 1,
+        "trajectory_id": 57,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Walk across the floor and wait the archway. "
+      },
+      {
+        "episode_id": "13",
+        "episode_index": 2,
+        "trajectory_id": 62,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Walk passed the dining table and continue towards the kitchen. Walk through the kitchen passed the counters and stove and stop near the sink. "
+      },
+      {
+        "episode_id": "40",
+        "episode_index": 3,
+        "trajectory_id": 155,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Walk into the kitchen area. Walk by the sink and oven. Walk straight into the hallway. turn right into the little room. Turn left and walk into the bedroom. Stop by the corner of the bed. "
+      },
+      {
+        "episode_id": "42",
+        "episode_index": 4,
+        "trajectory_id": 155,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Walk towards the kitchen area. Keep walking along the kitchen area towards the doorway. Turn right and exit the kitchen area walking across the small living room area and into the bedroom to you left. "
+      },
+      {
+        "episode_id": "52",
+        "episode_index": 5,
+        "trajectory_id": 175,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Take a right at the large clock and travel straight through the kitchen, when you see the thermostat on the wall you are right next to the washroom. "
+      },
+      {
+        "episode_id": "70",
+        "episode_index": 6,
+        "trajectory_id": 254,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Go through living room, through the door on the to the right, through the den, through the dining to, to the outdoor foyer. Stop before going outside. "
+      },
+      {
+        "episode_id": "94",
+        "episode_index": 7,
+        "trajectory_id": 300,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Walk forward, take a left around the corner and walk all the way to the end of the hallway, and stop at the door before the bedroom. "
+      },
+      {
+        "episode_id": "116",
+        "episode_index": 8,
+        "trajectory_id": 412,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "you are in a closet, walk forward, turn right to walk out of closet into a bed room. turn right and see bath room, walk into bathroom and wait near the tub and sink. "
+      },
+      {
+        "episode_id": "140",
+        "episode_index": 9,
+        "trajectory_id": 552,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Walk through the doorway to the right of the dining room table then go through the doorway by the flower pot.  Take the doorway directly left of the staircase and wait there. "
+      },
+      {
+        "episode_id": "150",
+        "episode_index": 10,
+        "trajectory_id": 601,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Turn around and walk to the end of the bed. At the end of the bed turn right and walk to the hallway. Once at the entrance way, walk through the hallway to the next room. "
+      },
+      {
+        "episode_id": "156",
+        "episode_index": 11,
+        "trajectory_id": 635,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Leave the bathroom.  Go through the door straight across the hall walk straight through the kitchen.  Turn left at the end of the bar turn left again and go in the room to the right stand in between the closet and the sink. "
+      },
+      {
+        "episode_id": "166",
+        "episode_index": 12,
+        "trajectory_id": 668,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Go forward by the windows, and then stop by the lamp. "
+      },
+      {
+        "episode_id": "171",
+        "episode_index": 13,
+        "trajectory_id": 686,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Head across the room towards the front door then turn left. Go up the stairs and turn right. Enter the bedroom then wait. "
+      },
+      {
+        "episode_id": "176",
+        "episode_index": 14,
+        "trajectory_id": 705,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Go straight and then turn to the right and go to the bathroom door.  Go through the doorway and walk through the bathroom to the other door.  You will then be in a gym.  Stop when you get into this room and wait. "
+      },
+      {
+        "episode_id": "181",
+        "episode_index": 15,
+        "trajectory_id": 722,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Walk up stairs. At top of stairs turn right. Walk straight to bedroom. Turn left and walk to bed lamp.Turn left and enter closet. Stop at rug. "
+      },
+      {
+        "episode_id": "187",
+        "episode_index": 16,
+        "trajectory_id": 774,
+        "scene_id": "mp3d/x8F5xyUWy9e/x8F5xyUWy9e.glb",
+        "instruction": "Go down the hall past some plants towards a doorway to the hot tub and some lounge chairs.  Stop in front of the large tub. "
+      },
+      {
+        "episode_id": "190",
+        "episode_index": 17,
+        "trajectory_id": 788,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Walk past the kitchen and go behind the couch and take a right into the fitness room. Stop next to the treadmill. "
+      },
+      {
+        "episode_id": "191",
+        "episode_index": 18,
+        "trajectory_id": 788,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Leave sitting room to living room, turn right around couch, turn left and follow couch turn slight right into exercise room and stop by treadmill. "
+      },
+      {
+        "episode_id": "207",
+        "episode_index": 19,
+        "trajectory_id": 817,
+        "scene_id": "mp3d/Z6MFQCViBuw/Z6MFQCViBuw.glb",
+        "instruction": "Walk out of the room keeping the fireplace on your left. Walk down the long corridor and stop once you reach the next set of doors. "
+      },
+      {
+        "episode_id": "218",
+        "episode_index": 20,
+        "trajectory_id": 909,
+        "scene_id": "mp3d/X7HyMhZNoso/X7HyMhZNoso.glb",
+        "instruction": "Leave the bedroom and take a left in the hallway. Go straight and go into the room that is the second on the left. Stop in the doorway to the room. "
+      },
+      {
+        "episode_id": "226",
+        "episode_index": 21,
+        "trajectory_id": 955,
+        "scene_id": "mp3d/X7HyMhZNoso/X7HyMhZNoso.glb",
+        "instruction": "Leave the bedroom and take a right in the hall, and walk straight. Take a left into the third entry way on your left and enter the bedroom. Stop in the doorway to the bedroom. "
+      },
+      {
+        "episode_id": "232",
+        "episode_index": 22,
+        "trajectory_id": 961,
+        "scene_id": "mp3d/oLBMNvg9in8/oLBMNvg9in8.glb",
+        "instruction": "Exit the bathroom, go up the stairs, turn right, walk down the hall, enter the room at the end of the hall, wait at the sculpture. "
+      },
+      {
+        "episode_id": "244",
+        "episode_index": 23,
+        "trajectory_id": 989,
+        "scene_id": "mp3d/X7HyMhZNoso/X7HyMhZNoso.glb",
+        "instruction": "Go through the door and turn left. Go to the left of the stairs. Stop in the doorway to the left of the white double doors. "
+      },
+      {
+        "episode_id": "247",
+        "episode_index": 24,
+        "trajectory_id": 992,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "walk straight to hallway on right. turn right and follow hallway, at the end of hallway turn slight left and enter living room. Stop at couch. "
+      },
+      {
+        "episode_id": "259",
+        "episode_index": 25,
+        "trajectory_id": 1036,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Exit the bathroom, wait at the white rug in the hallway. "
+      },
+      {
+        "episode_id": "265",
+        "episode_index": 26,
+        "trajectory_id": 1041,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Walk towards oven and turn right through doorway. Go down hallway and turn left  and wait at bathroom. "
+      },
+      {
+        "episode_id": "275",
+        "episode_index": 27,
+        "trajectory_id": 1090,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Walk past hall table. Walk into bedroom. Make left at table clock. Wait at bathroom door threshold. "
+      },
+      {
+        "episode_id": "308",
+        "episode_index": 28,
+        "trajectory_id": 1189,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Leave the bathroom and go into the bedroom. Leave the bedroom and go into the hallway. Stop at the edge of the table under the mirror in the hall. "
+      },
+      {
+        "episode_id": "312",
+        "episode_index": 29,
+        "trajectory_id": 1192,
+        "scene_id": "mp3d/x8F5xyUWy9e/x8F5xyUWy9e.glb",
+        "instruction": "Leave the sauna and enter the pool room. Stand on the platform at the end of the pool near the lounge chairs. "
+      },
+      {
+        "episode_id": "321",
+        "episode_index": 30,
+        "trajectory_id": 1223,
+        "scene_id": "mp3d/EU6Fwq7SyZv/EU6Fwq7SyZv.glb",
+        "instruction": "GO straight, take a left once you enter the bedroom. Stop in the bathroom. "
+      },
+      {
+        "episode_id": "330",
+        "episode_index": 31,
+        "trajectory_id": 1275,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Walk down the flight of stairs to the lower level. Walk into the room ahead with the tile mosaic on the floor. Walk around the corner through the open arched door to the right with rug on the ground. "
+      },
+      {
+        "episode_id": "338",
+        "episode_index": 32,
+        "trajectory_id": 1317,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Walk into the bedroom on the right of the stairs. Take a left before you reach the bed and wlk straight into the bathroom. Stop outside of the little room with the toilet. "
+      },
+      {
+        "episode_id": "348",
+        "episode_index": 33,
+        "trajectory_id": 1345,
+        "scene_id": "mp3d/EU6Fwq7SyZv/EU6Fwq7SyZv.glb",
+        "instruction": "Go up the stairs and take a left. Walk towards the couch and chairs in the sitting area. Walk through the sitting area and stop in front of the first door to the balcony on your left. "
+      },
+      {
+        "episode_id": "362",
+        "episode_index": 34,
+        "trajectory_id": 1416,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Walk through kitchen. Make left after spider plant. Wait at open door on left. "
+      },
+      {
+        "episode_id": "371",
+        "episode_index": 35,
+        "trajectory_id": 1473,
+        "scene_id": "mp3d/X7HyMhZNoso/X7HyMhZNoso.glb",
+        "instruction": "Walk through the dining room and kitchen air to the short flight of stairs. Walk up the short flight of stairs. Wait by the door at the top of the stairs. "
+      },
+      {
+        "episode_id": "377",
+        "episode_index": 36,
+        "trajectory_id": 1496,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Leave the bathroom and take a right. Walk down the hallway into the entry way and stop next to the console table on the right, and the banister to the stairs on the right. "
+      },
+      {
+        "episode_id": "387",
+        "episode_index": 37,
+        "trajectory_id": 1549,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Turn to the right and go out the bathroom door.  Turn to the right a little more.  Go through the galley kitchen.  Walk between the stove and the island.  When you get past the island, stop, and wait. "
+      },
+      {
+        "episode_id": "403",
+        "episode_index": 38,
+        "trajectory_id": 1627,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Turn right to walk through the right doorway. Walk through the left doorway. Stop at the entrance to the dining room. "
+      },
+      {
+        "episode_id": "411",
+        "episode_index": 39,
+        "trajectory_id": 1648,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Walk to the living room on the far side of the counter. Stop next to the end table next to the couch with the bookshelf on your right. "
+      },
+      {
+        "episode_id": "423",
+        "episode_index": 40,
+        "trajectory_id": 1676,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Turn left and walk across the hallway. Turn left again and walk across this hallway and wait by the bathtub. "
+      },
+      {
+        "episode_id": "432",
+        "episode_index": 41,
+        "trajectory_id": 1679,
+        "scene_id": "mp3d/Z6MFQCViBuw/Z6MFQCViBuw.glb",
+        "instruction": "Walk out through the door. Follow the red carpet to the right of the table. Stop in the next doorway. "
+      },
+      {
+        "episode_id": "439",
+        "episode_index": 42,
+        "trajectory_id": 1720,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Turn around and walk through the door into the hallway. Turn left and go forward and stop next to the bed. Then turn left and go into the bathroom. "
+      },
+      {
+        "episode_id": "447",
+        "episode_index": 43,
+        "trajectory_id": 1793,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Go down the walkway between the bar and the floor cabinets. Make a left at the door leading to the bedroom. "
+      },
+      {
+        "episode_id": "454",
+        "episode_index": 44,
+        "trajectory_id": 1827,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Take a left and take a right at the doll hutch. Walk into the bedroom and take a left. Walk into the bathroom and wait in front of the sink. "
+      },
+      {
+        "episode_id": "461",
+        "episode_index": 45,
+        "trajectory_id": 1851,
+        "scene_id": "mp3d/EU6Fwq7SyZv/EU6Fwq7SyZv.glb",
+        "instruction": "Turn around and walk past a wooden cabinet on the right.  Then turn to the right and walk in the bedroom.  Turn to the right again, and there will be a bathroom.  Stop right inside the doorway.  Wait there. "
+      },
+      {
+        "episode_id": "469",
+        "episode_index": 46,
+        "trajectory_id": 1879,
+        "scene_id": "mp3d/Z6MFQCViBuw/Z6MFQCViBuw.glb",
+        "instruction": "Turn right and walk along the red carpet to your right. Walk past the doorway wait by the glass info panes. "
+      },
+      {
+        "episode_id": "479",
+        "episode_index": 47,
+        "trajectory_id": 1907,
+        "scene_id": "mp3d/oLBMNvg9in8/oLBMNvg9in8.glb",
+        "instruction": "Walk along the carpet. Turn left and enter the rightmost doorway. Wait on the first few steps of the stairs. "
+      },
+      {
+        "episode_id": "513",
+        "episode_index": 48,
+        "trajectory_id": 2068,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Go into the living area with the fireplace. Stop in the area between the two white sofas, next to the entrance to the dining room. "
+      },
+      {
+        "episode_id": "516",
+        "episode_index": 49,
+        "trajectory_id": 2071,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Walk past the sink, and through the open door. Make a hard left at the closed brown and frosted glass french doors, and then a hard right.. Walk past the kitchen, and wait near the sofa end table. "
+      },
+      {
+        "episode_id": "526",
+        "episode_index": 50,
+        "trajectory_id": 2144,
+        "scene_id": "mp3d/EU6Fwq7SyZv/EU6Fwq7SyZv.glb",
+        "instruction": "Walk past sisal carpet runner. Wait at open white door. "
+      },
+      {
+        "episode_id": "531",
+        "episode_index": 51,
+        "trajectory_id": 2154,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Exit closet, and walk past bed. Walk out open bedroom door, and wait at top of stair landing. "
+      },
+      {
+        "episode_id": "546",
+        "episode_index": 52,
+        "trajectory_id": 2212,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Turn right, and then make a right again entering the room that is on the right of the painting placed on the wall. Walk inside the room, and stop next to the mirror sliding closet doors. "
+      },
+      {
+        "episode_id": "550",
+        "episode_index": 53,
+        "trajectory_id": 2233,
+        "scene_id": "mp3d/Z6MFQCViBuw/Z6MFQCViBuw.glb",
+        "instruction": "Take the leftmost door. Walk past the large painting to your left. Take a left and wait in the doorway. "
+      },
+      {
+        "episode_id": "559",
+        "episode_index": 54,
+        "trajectory_id": 2282,
+        "scene_id": "mp3d/Z6MFQCViBuw/Z6MFQCViBuw.glb",
+        "instruction": "Walk straight out the door in front of you and follow the red carpet. Keep going through the room with the ropes and stop when you enter the next room with ropes. "
+      },
+      {
+        "episode_id": "568",
+        "episode_index": 55,
+        "trajectory_id": 2292,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Exit the room and then go down the hallway until you get a frame on the wall to your right with a bear and balloons that says \"welcome\" and wait there. "
+      },
+      {
+        "episode_id": "576",
+        "episode_index": 56,
+        "trajectory_id": 2342,
+        "scene_id": "mp3d/Z6MFQCViBuw/Z6MFQCViBuw.glb",
+        "instruction": "Walk through the bedroom and exit through the door left of the red bed. Head into the next room. Walk forward into next room. Stop at the next door exiting the room. "
+      },
+      {
+        "episode_id": "586",
+        "episode_index": 57,
+        "trajectory_id": 2375,
+        "scene_id": "mp3d/Z6MFQCViBuw/Z6MFQCViBuw.glb",
+        "instruction": "Go into the room with the tile floor and wait. "
+      },
+      {
+        "episode_id": "602",
+        "episode_index": 58,
+        "trajectory_id": 2489,
+        "scene_id": "mp3d/X7HyMhZNoso/X7HyMhZNoso.glb",
+        "instruction": "Leave the bathroom and closet. Exit the bedroom and take a right. Enter the room on the right and stop in the doorway. "
+      },
+      {
+        "episode_id": "609",
+        "episode_index": 59,
+        "trajectory_id": 2527,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Exit the kitchen, walk down the hall and wait in the exercise room. "
+      },
+      {
+        "episode_id": "620",
+        "episode_index": 60,
+        "trajectory_id": 2599,
+        "scene_id": "mp3d/EU6Fwq7SyZv/EU6Fwq7SyZv.glb",
+        "instruction": "Walk forward along the railing to the balcony. Go past the cabinet on your left. Stop on the rug before you pass the first bed. "
+      },
+      {
+        "episode_id": "643",
+        "episode_index": 61,
+        "trajectory_id": 2665,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Take a sharp left. Walk under the chandelier and wait next to the billiards table. "
+      },
+      {
+        "episode_id": "655",
+        "episode_index": 62,
+        "trajectory_id": 2695,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Leave the bedroom. Turn left into the hallway opposite the bookshelf. Go to the end of the hallway. Go left to the white couch. "
+      },
+      {
+        "episode_id": "670",
+        "episode_index": 63,
+        "trajectory_id": 2755,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Go straight into the door in front of you, turn left and then turn left again to go into the bathroom. Wait by the second sink. "
+      },
+      {
+        "episode_id": "677",
+        "episode_index": 64,
+        "trajectory_id": 2776,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Go all the way down the hall until you see a white vase and then make a left. Following that, make a left directly into the bathroom which will be the first door on the left and wait there. "
+      },
+      {
+        "episode_id": "698",
+        "episode_index": 65,
+        "trajectory_id": 2834,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Head out of the shower and out of the bathroom.  Go toward the bedroom.  Go in the bedroom and stop at the side of the bed. "
+      },
+      {
+        "episode_id": "705",
+        "episode_index": 66,
+        "trajectory_id": 2853,
+        "scene_id": "mp3d/Z6MFQCViBuw/Z6MFQCViBuw.glb",
+        "instruction": "Walk forward along red carpet. Stop at the fire extinguisher. "
+      },
+      {
+        "episode_id": "715",
+        "episode_index": 67,
+        "trajectory_id": 2879,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "walk through kitchen, turn right at bathroom, immediately left again and walk through doorway to bedroom and stop. "
+      },
+      {
+        "episode_id": "721",
+        "episode_index": 68,
+        "trajectory_id": 2909,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Turn around and go to your left. Then go through the doorway on your left. Then turn right by the island. "
+      },
+      {
+        "episode_id": "739",
+        "episode_index": 69,
+        "trajectory_id": 3012,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Exit bathroom and follow hallway through archway directly in front. Turn right when hallway ends at pictures and table. Follow hallway passed piano and stop in the circle on the hallway floor. "
+      },
+      {
+        "episode_id": "743",
+        "episode_index": 70,
+        "trajectory_id": 3038,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Exit the room and turn left, head toward the kitchen and turn right. Go through the kitchen and out the door. Wait right at the bathroom door. "
+      },
+      {
+        "episode_id": "748",
+        "episode_index": 71,
+        "trajectory_id": 3085,
+        "scene_id": "mp3d/X7HyMhZNoso/X7HyMhZNoso.glb",
+        "instruction": "Go toward the house and through the sliding doors.  Turn right and stop by the dinning room table. "
+      },
+      {
+        "episode_id": "755",
+        "episode_index": 72,
+        "trajectory_id": 3116,
+        "scene_id": "mp3d/EU6Fwq7SyZv/EU6Fwq7SyZv.glb",
+        "instruction": "follow the bay windows then take a left. go slightly right and stop by the staircase. "
+      },
+      {
+        "episode_id": "765",
+        "episode_index": 73,
+        "trajectory_id": 3149,
+        "scene_id": "mp3d/EU6Fwq7SyZv/EU6Fwq7SyZv.glb",
+        "instruction": "Turn right at the post and walk forward alongside the glass doors on the left. Wait in front of the pool table. "
+      },
+      {
+        "episode_id": "781",
+        "episode_index": 74,
+        "trajectory_id": 3263,
+        "scene_id": "mp3d/EU6Fwq7SyZv/EU6Fwq7SyZv.glb",
+        "instruction": "Move ahead in between bar and table to the chair. "
+      },
+      {
+        "episode_id": "787",
+        "episode_index": 75,
+        "trajectory_id": 3269,
+        "scene_id": "mp3d/oLBMNvg9in8/oLBMNvg9in8.glb",
+        "instruction": "Leave the room and take a left int he hall. Enter the room which is first on the right.Take a right and stop on the rug in front of the animal head on the floor. "
+      },
+      {
+        "episode_id": "804",
+        "episode_index": 76,
+        "trajectory_id": 3289,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Walk out of the room and past the stairs. Walk through the second hallway to the left. Turn left and walk into the room. Stop in front of the dining room table. "
+      },
+      {
+        "episode_id": "810",
+        "episode_index": 77,
+        "trajectory_id": 3347,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Leave the closet, and walk out of the bedroom. Stop once you exit the bedroom door. "
+      },
+      {
+        "episode_id": "821",
+        "episode_index": 78,
+        "trajectory_id": 3371,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Exit the bedroom. Walk by the bathroom. Take the first left. Walk through the first door on the left. Stop by the sink. "
+      },
+      {
+        "episode_id": "824",
+        "episode_index": 79,
+        "trajectory_id": 3390,
+        "scene_id": "mp3d/Z6MFQCViBuw/Z6MFQCViBuw.glb",
+        "instruction": "Turn around and walk down the red rug and cross the room. Stop once you enter the next room and stop. "
+      },
+      {
+        "episode_id": "842",
+        "episode_index": 80,
+        "trajectory_id": 3433,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Go straight, pass the piano and the pictures on the wall then turn left and head down the hallway then turn right and stop by the bed. "
+      },
+      {
+        "episode_id": "1051",
+        "episode_index": 81,
+        "trajectory_id": 4235,
+        "scene_id": "mp3d/x8F5xyUWy9e/x8F5xyUWy9e.glb",
+        "instruction": "Turn around and exit the doorway. Turn left and exit the door. Stop next to the pool. "
+      },
+      {
+        "episode_id": "1056",
+        "episode_index": 82,
+        "trajectory_id": 4239,
+        "scene_id": "mp3d/x8F5xyUWy9e/x8F5xyUWy9e.glb",
+        "instruction": "walk forward near the pool and make a right turn and stop at the doorway. "
+      },
+      {
+        "episode_id": "1061",
+        "episode_index": 83,
+        "trajectory_id": 4268,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Turn to your right and walk down the hallway past the piano to the end. Turn left when you reach the dresser drawers and stop in the doorway. "
+      },
+      {
+        "episode_id": "1071",
+        "episode_index": 84,
+        "trajectory_id": 4297,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Turn left and walk straight across the kitchen and through the storage area. Once out, turn right and then enter the last room on the left and stop in the doorway. "
+      },
+      {
+        "episode_id": "1077",
+        "episode_index": 85,
+        "trajectory_id": 4330,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Turn right and exit the kitchen and enter the hallway with the stairs.  Walk around the stair well and enter the laundry room. "
+      },
+      {
+        "episode_id": "1084",
+        "episode_index": 86,
+        "trajectory_id": 4381,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Exit the bathroom and enter the hall. Take a left in the hall and then enter another hall. Take a right at this hall, then take a left to enter another bathroom. "
+      },
+      {
+        "episode_id": "1085",
+        "episode_index": 87,
+        "trajectory_id": 4381,
+        "scene_id": "mp3d/zsNo4HB9uLZ/zsNo4HB9uLZ.glb",
+        "instruction": "Exit the bathroom. Turn left and then turn right. Turn left and go into the other bathroom. Wait near the sink. "
+      },
+      {
+        "episode_id": "1087",
+        "episode_index": 88,
+        "trajectory_id": 4391,
+        "scene_id": "mp3d/2azQ1b91cZZ/2azQ1b91cZZ.glb",
+        "instruction": "Face the indoor grill and turn right. Walk straight through the door way.  Walk passed the microwave on the left. Walk through the doorway and stop beside the door. "
+      },
+      {
+        "episode_id": "1092",
+        "episode_index": 89,
+        "trajectory_id": 4427,
+        "scene_id": "mp3d/X7HyMhZNoso/X7HyMhZNoso.glb",
+        "instruction": "Turn to face black door. Walk forward. Turn right to walk past stairs. Stop in front of door on right. "
+      },
+      {
+        "episode_id": "1106",
+        "episode_index": 90,
+        "trajectory_id": 4469,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Turn right into hall, walk straight into the kitchen, stop at refrigerator. "
+      },
+      {
+        "episode_id": "1117",
+        "episode_index": 91,
+        "trajectory_id": 4482,
+        "scene_id": "mp3d/x8F5xyUWy9e/x8F5xyUWy9e.glb",
+        "instruction": "Go alongside the pool towards the bar directly in front of you. "
+      },
+      {
+        "episode_id": "1133",
+        "episode_index": 92,
+        "trajectory_id": 4534,
+        "scene_id": "mp3d/Z6MFQCViBuw/Z6MFQCViBuw.glb",
+        "instruction": "Walk straight until you can't anymore then turn left. Wait near the door way straight ahead. "
+      },
+      {
+        "episode_id": "1139",
+        "episode_index": 93,
+        "trajectory_id": 4573,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Exit the bedroom and walk strait across the hallway. Enter the door at the back of the bedroom and wait near the sink. "
+      },
+      {
+        "episode_id": "1142",
+        "episode_index": 94,
+        "trajectory_id": 4590,
+        "scene_id": "mp3d/QUCTc6BB5sX/QUCTc6BB5sX.glb",
+        "instruction": "Turn left to face bed. Walk past bed and out of door. Walk across hall to next bedroom. Stop in doorway. "
+      },
+      {
+        "episode_id": "1148",
+        "episode_index": 95,
+        "trajectory_id": 4597,
+        "scene_id": "mp3d/8194nk5LbLH/8194nk5LbLH.glb",
+        "instruction": "walk towards fireplace, walk on the left side of the brown couch, turn right after couch, turn left after four person table and stop in front of barstools. "
+      },
+      {
+        "episode_id": "1284",
+        "episode_index": 96,
+        "trajectory_id": 5025,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Leave the fitness area, and go left. Take the first right at the wine room. Walk straight ahead into the TV room. Stop once you enter the room. "
+      },
+      {
+        "episode_id": "1301",
+        "episode_index": 97,
+        "trajectory_id": 5067,
+        "scene_id": "mp3d/Z6MFQCViBuw/Z6MFQCViBuw.glb",
+        "instruction": "Walk forward and enter the next room.  Stop at the doors on the far side. "
+      },
+      {
+        "episode_id": "1307",
+        "episode_index": 98,
+        "trajectory_id": 5123,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Turn right and go straight past the table and chairs. Wait at the kitchen entrance. "
+      },
+      {
+        "episode_id": "1406",
+        "episode_index": 99,
+        "trajectory_id": 5562,
+        "scene_id": "mp3d/TbHJrupSAjP/TbHJrupSAjP.glb",
+        "instruction": "Turn left and exit the bedroom. Walk past the stairs into the rightmost doorway. Wait by the entrance of the bedroom. "
+      }
+    ]
+  },
+  "workers": 2,
+  "devices": [
+    "cuda:0"
+  ],
+  "gpu_memory_check": {
+    "cuda:0": {
+      "name": "NVIDIA GeForce RTX 4090",
+      "free_gb": 24.98,
+      "total_gb": 25.39,
+      "workers": 2,
+      "required_gb": 22.0,
+      "sufficient": true
+    }
+  },
+  "gpu_memory_per_worker_gb": 11.0,
+  "vlm": {
+    "backend": "deepseek",
+    "credential_source": "environment:OPENROUTER_API_KEY",
+    "base_url": "https://www.dmxapi.cn/v1",
+    "model": "deepseek-v4-flash-vision-exp",
+    "thinking": "disabled"
+  },
+  "assets": {
+    "tapir_checkpoint": "/workspace/anchor_navi_boris/models/tapnet/tapnet/checkpoints/causal_bootstapir_checkpoint.pt",
+    "gnm_policy_weights": "/workspace/anchor_navi_boris/models/visualnav-transformer/deployment/model_weights/gnm.pth",
+    "huggingface_cache": "/workspace/anchor_navi_boris/weights/huggingface"
+  },
+  "run_options": {
+    "r2r_data": "/workspace/anchor_navi_boris/data/datasets/opennav100_start_aligned/val_unseen_opennav100ids_start_aligned.json.gz",
+    "policy": "gnm",
+    "vlm_backend": "deepseek",
+    "vlm_model": null,
+    "deepseek_env": null,
+    "deepseek_base_url": null,
+    "max_steps_per_target": null,
+    "targets": null,
+    "sequence_max_exploration_hops": null,
+    "backtrack_method": "action-reversal",
+    "point_selection_prompt_version": null,
+    "instruction_completion_prompt_version": null,
+    "seed": null
+  },
+  "forwarded_args": [],
+  "shard_runner": "/workspace/anchor_navi_boris/scripts/evaluate_point_navigation.py",
+  "shards": [
+    {
+      "directory": "shard_0",
+      "device": "cuda:0",
+      "episode_indices": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14,
+        16,
+        18,
+        20,
+        22,
+        24,
+        26,
+        28,
+        30,
+        32,
+        34,
+        36,
+        38,
+        40,
+        42,
+        44,
+        46,
+        48,
+        50,
+        52,
+        54,
+        56,
+        58,
+        60,
+        62,
+        64,
+        66,
+        68,
+        70,
+        72,
+        74,
+        76,
+        78,
+        80,
+        82,
+        84,
+        86,
+        88,
+        90,
+        92,
+        94,
+        96,
+        98
+      ],
+      "episode_ids": [
+        "7",
+        "13",
+        "42",
+        "70",
+        "116",
+        "150",
+        "166",
+        "176",
+        "187",
+        "191",
+        "218",
+        "232",
+        "247",
+        "265",
+        "308",
+        "321",
+        "338",
+        "362",
+        "377",
+        "403",
+        "423",
+        "439",
+        "454",
+        "469",
+        "513",
+        "526",
+        "546",
+        "559",
+        "576",
+        "602",
+        "620",
+        "655",
+        "677",
+        "705",
+        "721",
+        "743",
+        "755",
+        "781",
+        "804",
+        "821",
+        "842",
+        "1056",
+        "1071",
+        "1084",
+        "1087",
+        "1106",
+        "1133",
+        "1142",
+        "1284",
+        "1307"
+      ],
+      "command": [
+        "/home/dev/miniforge3/envs/anchor_navi/bin/python",
+        "/workspace/anchor_navi_boris/scripts/evaluate_point_navigation.py",
+        "--mode",
+        "semantic",
+        "--exploration-strategy",
+        "instruction-sequence-recovery",
+        "--tracking-cluster-profile",
+        "rgb_only_dense_stop_v1",
+        "--episodes",
+        "0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62,64,66,68,70,72,74,76,78,80,82,84,86,88,90,92,94,96,98",
+        "--output-root",
+        "/workspace/anchor_navi_boris/outputs/e2e_eval/20260911_235744_opennav100_aligned_actrev/shard_0",
+        "--device",
+        "cuda:0",
+        "--r2r-data",
+        "/workspace/anchor_navi_boris/data/datasets/opennav100_start_aligned/val_unseen_opennav100ids_start_aligned.json.gz",
+        "--policy",
+        "gnm",
+        "--vlm-backend",
+        "deepseek",
+        "--backtrack-method",
+        "action-reversal"
+      ],
+      "returncode": 0,
+      "finished_utc": "2026-09-11T17:22:50.544272+00:00"
+    },
+    {
+      "directory": "shard_1",
+      "device": "cuda:0",
+      "episode_indices": [
+        1,
+        3,
+        5,
+        7,
+        9,
+        11,
+        13,
+        15,
+        17,
+        19,
+        21,
+        23,
+        25,
+        27,
+        29,
+        31,
+        33,
+        35,
+        37,
+        39,
+        41,
+        43,
+        45,
+        47,
+        49,
+        51,
+        53,
+        55,
+        57,
+        59,
+        61,
+        63,
+        65,
+        67,
+        69,
+        71,
+        73,
+        75,
+        77,
+        79,
+        81,
+        83,
+        85,
+        87,
+        89,
+        91,
+        93,
+        95,
+        97,
+        99
+      ],
+      "episode_ids": [
+        "11",
+        "40",
+        "52",
+        "94",
+        "140",
+        "156",
+        "171",
+        "181",
+        "190",
+        "207",
+        "226",
+        "244",
+        "259",
+        "275",
+        "312",
+        "330",
+        "348",
+        "371",
+        "387",
+        "411",
+        "432",
+        "447",
+        "461",
+        "479",
+        "516",
+        "531",
+        "550",
+        "568",
+        "586",
+        "609",
+        "643",
+        "670",
+        "698",
+        "715",
+        "739",
+        "748",
+        "765",
+        "787",
+        "810",
+        "824",
+        "1051",
+        "1061",
+        "1077",
+        "1085",
+        "1092",
+        "1117",
+        "1139",
+        "1148",
+        "1301",
+        "1406"
+      ],
+      "command": [
+        "/home/dev/miniforge3/envs/anchor_navi/bin/python",
+        "/workspace/anchor_navi_boris/scripts/evaluate_point_navigation.py",
+        "--mode",
+        "semantic",
+        "--exploration-strategy",
+        "instruction-sequence-recovery",
+        "--tracking-cluster-profile",
+        "rgb_only_dense_stop_v1",
+        "--episodes",
+        "1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47,49,51,53,55,57,59,61,63,65,67,69,71,73,75,77,79,81,83,85,87,89,91,93,95,97,99",
+        "--output-root",
+        "/workspace/anchor_navi_boris/outputs/e2e_eval/20260911_235744_opennav100_aligned_actrev/shard_1",
+        "--device",
+        "cuda:0",
+        "--r2r-data",
+        "/workspace/anchor_navi_boris/data/datasets/opennav100_start_aligned/val_unseen_opennav100ids_start_aligned.json.gz",
+        "--policy",
+        "gnm",
+        "--vlm-backend",
+        "deepseek",
+        "--backtrack-method",
+        "action-reversal"
+      ],
+      "returncode": 0,
+      "finished_utc": "2026-09-11T17:16:30.191245+00:00"
+    }
+  ],
+  "not_run_episode_indices": [],
+  "unscored_episode_indices": [],
+  "completed_utc": "2026-09-11T17:22:50.563307+00:00"
+}

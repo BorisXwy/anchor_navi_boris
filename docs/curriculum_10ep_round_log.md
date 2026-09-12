@@ -2102,3 +2102,21 @@
 - 尚未验证：固定十 EP 同轮回归（`bash run_e2e_eval.sh 0,3,6,9,18,27,45,126,204,219 --workers 2`），
   按 §16 在此之前本候选不得视为冻结配置。已知不覆盖：贴墙斜擦微滑与自由前进的 score 重叠，本规则
   捕获不到（停簇像素位移同样无法区分：微滑中位 4 px vs 自由 6 px），留作后续时序规则。
+
+## 端到端评测记录（非十 EP 轮次）— OpenNav100 对齐起始朝向 + action-reversal 全量（2026-09-11/12）
+
+- 轮次目录 `outputs/e2e_eval/20260911_235744_opennav100_aligned_actrev/`，commit `400fbfd`，数据集
+  `data/datasets/opennav100_start_aligned/val_unseen_opennav100ids_start_aligned.json.gz`（sha256 `cb20c192…`），
+  `--workers 2 --backtrack-method action-reversal`，85 分钟，云端 VLM 1387 次 / 约 842 万 token。
+- 结果：100/100 跑完、0 崩溃；`simulator_reported_success` 5/100（id 11、166、187、721、1117）；主动 STOP 14 次
+  （9 次在 3 m 圈外）；结束时在圈内未 STOP 14 条；结束方式 `no_floor_bearing_candidate` 83、序列完成 14、
+  回溯被 VLM 拒绝 3。与 `20260911_001436` 轮不可直接比成功数（数据集与四处改动不同），可比「走到多深」：
+  0 句完成 21 条（前 42）、结束时圈内 19（前 7）、平均沿路净进展 1.60 m（前 0.35 m）。
+- 事后审计：独立复核 `verify_round_stage_completions.py --include-unknown --always-call-vlm`（519 次调用）与
+  `analyze_judge_round.py` 均已实际运行；300 次不确定中 235 次确认、65 次推翻，167 次完成中 14 次推翻。
+- 失败归因（互斥五组，95 条）：转弯句方向门清空 30、最后一句 STOP_WAIT 停不下来 17（9 条曾在终点圈内）、
+  中途句候选耗尽 36、停错地方 9、回溯被拒 3。详见
+  `docs/e2e_eval_reports/20260911_235744_opennav100_aligned_actrev/failure_analysis_95_plain_zh.md`，
+  含按优先级 / 有效性排序的改进措施（M1–M8，全部尚未实施、尚未验证）。
+- 本轮不构成任何候选的冻结依据；上一批改动（`272c223`、`2a3dbd9`、停滞早停、步数预算 40、action-reversal）
+  仍未做固定十 EP 同轮回归。
