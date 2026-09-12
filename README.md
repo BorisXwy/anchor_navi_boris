@@ -366,6 +366,36 @@ Physical backtracking inside that strategy is selected with
 `evaluate_point_navigation.py`, `run_e2e_eval.sh` and
 `evaluate_r2r_all_modules.py` forward the same flag.
 
+### Blocked directions and the explicit turn gate (2026-09-12)
+
+Every judge-rejected branch and every executor failure (forward stall, lost
+cluster, step budget) blocks the selected ray at the node it started from.
+Two rules bound how much of the panorama that removes:
+
+- `--blocked-direction-exclusion-deg` (default `22.5`, half of the 45-degree
+  eight-view spacing) is the half-width of the hard exclusion cone around each
+  blocked ray, so one block removes exactly the nearest photo. `50` restores the
+  earlier behaviour in which one block removed three photos.
+- Only judge-confirmed blocks count toward `--sequence-max-blocked-directions`
+  (default 5). Executor failures are still hard-excluded but say only that the
+  chosen point was unreachable, so they do not consume the cap. The state
+  snapshot exposes both lists (`blocked_yaws_by_verified_node`,
+  `judge_blocked_yaws_by_verified_node`).
+
+An explicit `turn left/right/around` clause restricts selection to its three
+side views. When none of them carries strict floor, the strategy no longer ends
+the episode: it turns in place to the sector centre (90/180 degrees, at most
+once per sub-instruction), stores the pure-turn edge with its own keyframes and
+hands it to the completion judge like any other edge. Later selections for the
+same clause are limited to the three forward views of the turned heading, so
+the turn is never applied twice; the incoming-direction exclusion keeps
+pointing at the pre-turn arrival direction. If that forward gate is empty as
+well the episode ends as before (`no_floor_bearing_candidate`). Records carry
+`in_place_turn`, the graph edge kind is
+`instruction_sequence_rgb_only_in_place_turn`, and
+`--no-in-place-turn-on-empty-gate` disables the fallback. Both flags are
+forwarded by `evaluate_point_navigation.py` and `run_e2e_eval.sh`.
+
 ## End-to-end evaluation launcher
 
 `run_e2e_eval.sh` (thin wrapper over `scripts/run_end_to_end_eval.py`) mirrors

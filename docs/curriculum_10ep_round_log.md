@@ -2161,3 +2161,37 @@
 - 尚未验证：固定十 EP 同轮回归（`bash run_e2e_eval.sh 0,3,6,9,18,27,45,126,204,219 --workers 2 --backtrack-method action-reversal
   --run-tag m1_stop_wait`，新 flag 已是默认）与 100 条复跑；按 §16 未回归前本候选不得视为冻结配置。独立复核器
   `verify_round_stage_completions.py` 仍读同一份 cue 并带运动摘要、无 STOP_WAIT 规则，对 STOP_WAIT 的复核口径未随 M1 更新（记入 M5）。
+
+## 候选改动记录（未冻结）— M2 转弯门空时原地转 + M3 封锁规则收窄（2026-09-12）
+
+- 依据：`docs/e2e_eval_reports/20260911_235744_opennav100_aligned_actrev/failure_analysis_95_plain_zh.md` §5.1 的 M2、M3。
+  本轮 83 条以「过滤后无候选」结束：① 组 30 条是转弯句方向门（3 张侧向照片）被一次裁判不确定或一次撞墙的 ±50° 封锁清空；
+  其余 53 条是 ±50° 封锁锥叠加来路排除与无地面照片把 8 张照片清零（35 条只封了 0–2 个方向）。5 次封锁上限在 100 条里从未触发。
+  只改策略层 / 选点过滤 / 方向门，不动裁判、走路层、拆解。
+- 改动（代码尚未 commit，工作树 diff）：
+  - M3(a) `point_selectors.InstructionVLMPointSelector` 新增 `blocked_direction_exclusion_deg`（默认 22.5 = 八视图 45° 间距一半，
+    一次封锁只排除最近一张照片；`choose_view` 自身的 50° 默认值不动），CLI `--blocked-direction-exclusion-deg`（50 可回滚），
+    `evaluate_point_navigation.py` 镜像并转发、写入 `run_configuration`。
+  - M3(b) `InstructionSequenceStateMachine._add_block(..., counts_toward_cap)`：物理失败（`block_failed_physical_direction`）仍进
+    `blocked_yaws_by_verified_node` 硬排除，但不计入 `max_blocked_directions_per_node`；新增 `judge_blocked_yaws_by_verified_node`
+    只记裁判确认的封锁并以它判上限；`on_backtrack` 身份交接按来源复制；snapshot 增两键。
+  - M3(c) 「清零前解除软排除只保留硬封锁」在 v10 路径早已存在（`vlm_harness.py` `not self._history_safe_refinement` 分支），
+    本轮不加代码，只加契约测试 `test_v10_readmits_soft_excluded_floor_views_before_no_candidate_error` 证明。
+  - M2 新模块 `scripts/direction_gate.py`（`DirectionGateEmptyError(sector)`，消息与旧 RuntimeError 相同；`TURN_GATE_CENTER_DEG`
+    left +90 / right −90 / rear 180；`plan_in_place_turn`）。`vlm_harness.select_ground_target` 门空时抛该类型；stage metadata
+    `in_place_turn_executed.active` 时 sector 改为 `forward`（|相对角| ≤ 45°，即原门旋转后的同一扇区，不重新打开反侧/正后）。
+    `rgb_only_instruction_sequence.run` 捕获后（开关开、该 sub-instruction 未用过、sector ∈ left/right/rear）原地转到门中心，
+    纯旋转边落 5 张 keyframe、建节点（`arrival_signal=direction_gate_in_place_turn`，
+    `edge_kind=instruction_sequence_rgb_only_in_place_turn`）、交裁判、走原状态机；来路排除改用「最后一次前进边的朝向 + π」
+    （`incoming_heading`），原地转不改变它。共享尾段抽成 `_finish_hop_at_stop_node`。开关 `--no-in-place-turn-on-empty-gate`。
+- 已实际运行并通过：`python -m unittest discover -s tests -p 'test_*.py'` **411 个全部通过**（基线 390，新增 21：
+  `tests/test_direction_gate.py` 7、`test_rgb_only_instruction_sequence.py` +9（含原地转/一次上限/来路方向/开关/整除校验/22.5°
+  转发）、`test_module_contracts.py` +3、`test_instruction_graph_modules.py` +2）；抽取尾段后在接入原地转前单独跑过全测试（404）
+  确认纯重构无行为变化。GPU 冒烟 `bash run_e2e_eval.sh 7 --vlm-backend heuristic --targets 1 --max-steps-per-target 12
+  --sequence-max-exploration-hops 1 --run-tag m2m3_smoke`（`outputs/e2e_eval/20260912_113514_m2m3_smoke`，returncode 0）：
+  trajectory `config.blocked_direction_exclusion_deg=22.5`、`config.in_place_turn_on_empty_gate=true`，state 快照含两个新键。
+  该冒烟第一句不是转弯句、heuristic 后端不会触发方向门，**M2 的原地转分支只由单元测试覆盖，尚无真实 state 运行**。
+- 尚未验证：固定十 EP 同轮回归（`bash run_e2e_eval.sh 0,3,6,9,18,27,45,126,204,219 --workers 2 --backtrack-method
+  action-reversal --run-tag m2m3`，新 flag 已是默认）与 100 条复跑；按 §16 未回归前本候选不得视为冻结配置。已知取舍：物理失败不再
+  消耗上限后，死胡同节点可能改以 `max_sequence_exploration_hops` 结束而非 `all_candidate_directions_blocked_at_verified_node`；
+  22.5° 锥会让同一错误方向的相邻照片被再次尝试（有意，由裁判封锁 5 次上限 + 30 跳预算兜底）。
